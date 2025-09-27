@@ -2,12 +2,7 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // SchemaSource represents a source for GraphQL schema
@@ -41,48 +36,10 @@ type Config struct {
 	Scalars   map[string]string       `yaml:"scalars"`   // Custom scalar mappings
 }
 
-// LoadFile loads configuration from a YAML file
+// LoadFile loads configuration from a file (YAML, TypeScript, or JavaScript)
 func LoadFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
-	}
-
-	// Expand environment variables
-	data = []byte(expandEnvVars(string(data)))
-
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
-	}
-
-	// Set defaults
-	if err := config.setDefaults(); err != nil {
-		return nil, err
-	}
-
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-
-	return &config, nil
-}
-
-// expandEnvVars expands ${VAR} and $VAR in the string
-func expandEnvVars(s string) string {
-	re := regexp.MustCompile(`\$\{([^}]+)\}|\$(\w+)`)
-	return re.ReplaceAllStringFunc(s, func(match string) string {
-		// Remove ${ } or $ prefix
-		varName := strings.TrimPrefix(match, "${")
-		varName = strings.TrimPrefix(varName, "$")
-		varName = strings.TrimSuffix(varName, "}")
-
-		if value := os.Getenv(varName); value != "" {
-			return value
-		}
-		return match // Return original if not found
-	})
+	registry := NewLoaderRegistry()
+	return registry.Load(path)
 }
 
 // setDefaults sets default values for the configuration

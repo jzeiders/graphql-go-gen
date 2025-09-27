@@ -1,0 +1,10 @@
+{
+  "name": "@graphql-go-gen/types",
+  "version": "0.1.0",
+  "description": "TypeScript type definitions for GraphQL Go Gen configuration",
+  "types": "config.d.ts",
+  "main": "config.d.ts",
+  "files": [
+    "config.d.ts"
+  ]
+}
