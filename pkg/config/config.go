@@ -2,15 +2,20 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
+	"time"
 )
 
 // SchemaSource represents a source for GraphQL schema
 type SchemaSource struct {
-	Type    string            `yaml:"type,omitempty"`    // "file" | "url" | "introspection"
-	Path    string            `yaml:"path,omitempty"`    // For file-based schemas
-	URL     string            `yaml:"url,omitempty"`     // For remote schemas
-	Headers map[string]string `yaml:"headers,omitempty"` // For authentication
+	Type     string            `yaml:"type,omitempty"`      // "file" | "url" | "introspection"
+	Path     string            `yaml:"path,omitempty"`      // For file-based schemas
+	URL      string            `yaml:"url,omitempty"`       // For remote schemas
+	Headers  map[string]string `yaml:"headers,omitempty"`   // For authentication
+	Timeout  string            `yaml:"timeout,omitempty"`   // HTTP timeout (e.g., "30s")
+	Retries  int               `yaml:"retries,omitempty"`   // Number of retry attempts
+	CacheTTL string            `yaml:"cache_ttl,omitempty"` // Cache TTL (e.g., "5m")
 }
 
 // Documents defines where to find GraphQL operations
@@ -106,9 +111,35 @@ func (c *Config) Validate() error {
 			if source.URL == "" {
 				return fmt.Errorf("schema[%d]: url is required for url type", i)
 			}
+			if err := validateURL(source.URL); err != nil {
+				return fmt.Errorf("schema[%d]: invalid URL: %w", i, err)
+			}
+			if source.Timeout != "" {
+				if err := validateDuration(source.Timeout); err != nil {
+					return fmt.Errorf("schema[%d]: invalid timeout: %w", i, err)
+				}
+			}
+			if source.CacheTTL != "" {
+				if err := validateDuration(source.CacheTTL); err != nil {
+					return fmt.Errorf("schema[%d]: invalid cache_ttl: %w", i, err)
+				}
+			}
 		case "introspection":
-			if source.Path == "" && source.URL == "" {
-				return fmt.Errorf("schema[%d]: either path or url is required for introspection", i)
+			if source.URL == "" {
+				return fmt.Errorf("schema[%d]: url is required for introspection", i)
+			}
+			if err := validateURL(source.URL); err != nil {
+				return fmt.Errorf("schema[%d]: invalid URL: %w", i, err)
+			}
+			if source.Timeout != "" {
+				if err := validateDuration(source.Timeout); err != nil {
+					return fmt.Errorf("schema[%d]: invalid timeout: %w", i, err)
+				}
+			}
+			if source.CacheTTL != "" {
+				if err := validateDuration(source.CacheTTL); err != nil {
+					return fmt.Errorf("schema[%d]: invalid cache_ttl: %w", i, err)
+				}
 			}
 		default:
 			return fmt.Errorf("schema[%d]: invalid type %q", i, source.Type)
@@ -133,6 +164,27 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateURL checks if a URL string is valid
+func validateURL(urlStr string) error {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must use http or https scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must have a host")
+	}
+	return nil
+}
+
+// validateDuration checks if a duration string is valid
+func validateDuration(duration string) error {
+	_, err := time.ParseDuration(duration)
+	return err
 }
 
 // ResolveRelativePaths resolves all relative paths in the config relative to the config file

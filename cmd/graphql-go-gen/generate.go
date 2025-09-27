@@ -76,7 +76,7 @@ func (g *Generator) Generate(ctx context.Context) error {
 		fmt.Println("Loading schema...")
 	}
 
-	schemaLoader := loader.NewFileSchemaLoader()
+	schemaLoader := loader.NewUniversalSchemaLoader()
 	sources := make([]schema.Source, len(g.config.Schema))
 
 	for i, src := range g.config.Schema {

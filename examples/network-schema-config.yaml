@@ -1,0 +1,60 @@
+# Example configuration demonstrating network schema loading capabilities
+
+# Load schema from multiple sources
+schema:
+  # Traditional file-based schema
+  - type: file
+    path: ./local-schema.graphql
+
+  # Load schema from a URL (e.g., schema registry)
+  - type: url
+    url: https://api.example.com/schema
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    timeout: 30s
+    retries: 3
+    cache_ttl: 5m
+
+  # Load schema via GraphQL introspection
+  - type: introspection
+    url: https://api.example.com/graphql
+    headers:
+      Authorization: "Bearer ${GRAPHQL_API_TOKEN}"
+      X-Custom-Header: "MyValue"
+    timeout: 45s
+    cache_ttl: 10m
+
+# Documents to scan for operations
+documents:
+  include:
+    - "src/**/*.graphql"
+    - "src/**/*.ts"
+    - "src/**/*.tsx"
+  exclude:
+    - "**/*.test.ts"
+    - "**/*.spec.ts"
+
+# Generation targets
+generates:
+  ./generated/types.ts:
+    plugins:
+      - typescript
+    config:
+      scalars:
+        DateTime: string
+        UUID: string
+        JSON: any
+
+  ./generated/operations.ts:
+    plugins:
+      - typescript
+      - typed-document-node
+    config:
+      documentMode: graphQLTag
+
+# Custom scalar mappings
+scalars:
+  DateTime: string
+  UUID: string
+  JSON: any
+  Decimal: number

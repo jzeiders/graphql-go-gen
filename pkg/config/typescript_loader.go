@@ -48,7 +48,7 @@ func (l *TypeScriptLoader) transpileTypeScript(path string) (string, error) {
 	if len(result.Errors) > 0 {
 		var errMsg string
 		for _, err := range result.Errors {
-			errMsg += fmt.Sprintf("%s: %s\n", err.Location, err.Text)
+			errMsg += fmt.Sprintf("%v: %s\n", err.Location, err.Text)
 		}
 		return "", fmt.Errorf("TypeScript compilation errors:\n%s", errMsg)
 	}

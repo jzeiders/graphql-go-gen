@@ -232,7 +232,28 @@ make test-coverage
 
 # Run benchmarks
 make bench
+
 ```
+
+### Benchmark Results (2025-09-27)
+
+Benchmarks were recorded on `goos=darwin`, `goarch=arm64` (Apple M-series laptop). To
+reproduce the measurements we ran the plugin benchmarks directly, skipping the
+package tests with `-run=^$`:
+
+```bash
+go test -run=^$ -bench=. -benchmem github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast
+go test -run=^$ -bench=. -benchmem github.com/jzeiders/graphql-go-gen/pkg/plugins/typed_document_node
+go test -run=^$ -bench=. -benchmem github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript
+go test -run=^$ -bench=. -benchmem github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript_operations
+```
+
+| Benchmark | ns/op | B/op | allocs/op |
+| --- | ---:| ---:| ---:|
+| Schema AST plugin | 25819 | 29218 | 811 |
+| TypedDocumentNode plugin | 122.8 | 496 | 4 |
+| TypeScript plugin | 8633 | 17611 | 79 |
+| TypeScript operations plugin | 132.3 | 496 | 4 |
 
 ## Performance Goals
 

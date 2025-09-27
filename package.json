@@ -1,0 +1,37 @@
+{
+  "name": "@graphql-go-gen/types",
+  "version": "1.0.0",
+  "description": "TypeScript type definitions for graphql-go-gen configuration",
+  "types": "./types/config.d.ts",
+  "main": "./types/config.d.ts",
+  "files": [
+    "types/**/*.d.ts",
+    "examples/*.ts",
+    "examples/*.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./types/config.d.ts"
+    },
+    "./config": {
+      "types": "./types/config.d.ts"
+    }
+  },
+  "keywords": [
+    "graphql",
+    "code-generation",
+    "go",
+    "typescript",
+    "config",
+    "schema"
+  ],
+  "author": "graphql-go-gen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jzeiders/graphql-go-gen.git"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}
