@@ -1,0 +1,145 @@
+# Test operations for plugin integration tests
+
+query GetUser($id: ID!) {
+  user(id: $id) {
+    id
+    name
+    email
+    role
+    posts {
+      id
+      title
+      published
+    }
+    profile {
+      bio
+      avatar
+    }
+  }
+}
+
+query GetUsers($first: Int, $after: String) {
+  users(first: $first, after: $after) {
+    edges {
+      node {
+        id
+        name
+        email
+        status
+      }
+      cursor
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}
+
+query SearchContent($query: String!, $limit: Int) {
+  search(query: $query, limit: $limit) {
+    __typename
+    ... on User {
+      id
+      name
+      email
+    }
+    ... on Post {
+      id
+      title
+      content
+      author {
+        name
+      }
+    }
+    ... on Comment {
+      id
+      content
+      author {
+        name
+      }
+    }
+  }
+}
+
+mutation CreateUser($input: CreateUserInput!) {
+  createUser(input: $input) {
+    id
+    name
+    email
+    role
+    createdAt
+  }
+}
+
+mutation UpdateUser($id: ID!, $input: UpdateUserInput!) {
+  updateUser(id: $id, input: $input) {
+    id
+    name
+    email
+    status
+    updatedAt
+  }
+}
+
+mutation PublishPost($postId: ID!) {
+  publishPost(id: $postId) {
+    id
+    title
+    published
+    publishedAt
+  }
+}
+
+subscription OnUserCreated {
+  userCreated {
+    id
+    name
+    email
+    role
+  }
+}
+
+subscription OnCommentAdded($postId: ID!) {
+  commentAdded(postId: $postId) {
+    id
+    content
+    author {
+      name
+    }
+    createdAt
+  }
+}
+
+fragment UserFields on User {
+  id
+  name
+  email
+  role
+  status
+}
+
+fragment PostFields on Post {
+  id
+  title
+  content
+  published
+  author {
+    ...UserFields
+  }
+  tags
+}
+
+query GetPostWithFragments($id: ID!) {
+  post(id: $id) {
+    ...PostFields
+    comments {
+      id
+      content
+      author {
+        ...UserFields
+      }
+    }
+  }
+}

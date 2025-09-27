@@ -1,0 +1,136 @@
+# Test schema for plugin integration tests
+scalar Date
+scalar JSON
+
+enum UserRole {
+  ADMIN
+  USER
+  GUEST
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+  PENDING
+}
+
+input CreateUserInput {
+  name: String!
+  email: String!
+  age: Int
+  role: UserRole!
+  metadata: JSON
+}
+
+input UpdateUserInput {
+  name: String
+  email: String
+  age: Int
+  role: UserRole
+  status: Status
+}
+
+interface Node {
+  id: ID!
+  createdAt: Date!
+}
+
+type User implements Node {
+  id: ID!
+  name: String!
+  email: String!
+  age: Int
+  role: UserRole!
+  status: Status!
+  posts: [Post!]!
+  profile: Profile
+  createdAt: Date!
+  updatedAt: Date!
+}
+
+type Profile {
+  id: ID!
+  bio: String
+  avatar: String
+  website: String
+  user: User!
+}
+
+type Post implements Node {
+  id: ID!
+  title: String!
+  content: String!
+  published: Boolean!
+  author: User!
+  comments: [Comment!]!
+  tags: [String!]!
+  createdAt: Date!
+  publishedAt: Date
+}
+
+type Comment {
+  id: ID!
+  content: String!
+  author: User!
+  post: Post!
+  createdAt: Date!
+}
+
+union SearchResult = User | Post | Comment
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type UserConnection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type UserEdge {
+  node: User!
+  cursor: String!
+}
+
+type Query {
+  # User queries
+  user(id: ID!): User
+  users(first: Int, after: String, filter: String): UserConnection!
+  currentUser: User
+
+  # Post queries
+  post(id: ID!): Post
+  posts(published: Boolean): [Post!]!
+
+  # Search
+  search(query: String!, limit: Int = 10): [SearchResult!]!
+
+  # Node interface
+  node(id: ID!): Node
+}
+
+type Mutation {
+  # User mutations
+  createUser(input: CreateUserInput!): User!
+  updateUser(id: ID!, input: UpdateUserInput!): User
+  deleteUser(id: ID!): Boolean!
+
+  # Post mutations
+  createPost(title: String!, content: String!, authorId: ID!): Post!
+  publishPost(id: ID!): Post
+  deletePost(id: ID!): Boolean!
+
+  # Comment mutations
+  addComment(postId: ID!, content: String!): Comment!
+  deleteComment(id: ID!): Boolean!
+}
+
+type Subscription {
+  userCreated: User!
+  postPublished: Post!
+  commentAdded(postId: ID!): Comment!
+}

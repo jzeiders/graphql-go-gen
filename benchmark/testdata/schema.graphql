@@ -1,0 +1,274 @@
+type Query {
+  user(id: ID!): User
+  users(first: Int, after: String, filter: UserFilter): UserConnection!
+  post(id: ID!): Post
+  posts(first: Int, after: String, authorId: ID, tag: String): PostConnection!
+  search(query: String!, type: SearchType): SearchResultConnection!
+  trending(limit: Int = 10): [TrendingItem!]!
+  notifications(unreadOnly: Boolean): [Notification!]!
+}
+
+type Mutation {
+  createUser(input: CreateUserInput!): UserPayload!
+  updateUser(id: ID!, input: UpdateUserInput!): UserPayload!
+  deleteUser(id: ID!): DeletePayload!
+  createPost(input: CreatePostInput!): PostPayload!
+  updatePost(id: ID!, input: UpdatePostInput!): PostPayload!
+  deletePost(id: ID!): DeletePayload!
+  likePost(postId: ID!): Post!
+  followUser(userId: ID!): User!
+  unfollowUser(userId: ID!): User!
+  markNotificationRead(id: ID!): Notification!
+}
+
+type Subscription {
+  postAdded(authorId: ID): Post!
+  postUpdated(id: ID!): Post!
+  notificationReceived: Notification!
+}
+
+type User {
+  id: ID!
+  username: String!
+  email: String!
+  fullName: String!
+  bio: String
+  avatar: String
+  posts(first: Int, after: String): PostConnection!
+  followers(first: Int, after: String): UserConnection!
+  following(first: Int, after: String): UserConnection!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  settings: UserSettings!
+  stats: UserStats!
+}
+
+type UserSettings {
+  theme: Theme!
+  language: Language!
+  emailNotifications: Boolean!
+  pushNotifications: Boolean!
+  privacy: PrivacyLevel!
+}
+
+type UserStats {
+  postCount: Int!
+  followerCount: Int!
+  followingCount: Int!
+  likeCount: Int!
+}
+
+type Post {
+  id: ID!
+  title: String!
+  content: String!
+  excerpt: String!
+  author: User!
+  tags: [String!]!
+  likes: Int!
+  comments(first: Int, after: String): CommentConnection!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  published: Boolean!
+  metadata: PostMetadata!
+}
+
+type PostMetadata {
+  readTime: Int!
+  wordCount: Int!
+  language: String!
+  seoTitle: String
+  seoDescription: String
+}
+
+type Comment {
+  id: ID!
+  content: String!
+  author: User!
+  post: Post!
+  parentComment: Comment
+  replies(first: Int, after: String): CommentConnection!
+  likes: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Notification {
+  id: ID!
+  type: NotificationType!
+  message: String!
+  read: Boolean!
+  user: User!
+  relatedUser: User
+  relatedPost: Post
+  createdAt: DateTime!
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  AUTO
+}
+
+enum Language {
+  EN
+  ES
+  FR
+  DE
+  JA
+  ZH
+}
+
+enum PrivacyLevel {
+  PUBLIC
+  FRIENDS_ONLY
+  PRIVATE
+}
+
+enum NotificationType {
+  POST_LIKED
+  POST_COMMENTED
+  USER_FOLLOWED
+  USER_MENTIONED
+  SYSTEM
+}
+
+enum SearchType {
+  USER
+  POST
+  COMMENT
+  ALL
+}
+
+input UserFilter {
+  username: String
+  email: String
+  fullName: String
+}
+
+input CreateUserInput {
+  username: String!
+  email: String!
+  password: String!
+  fullName: String!
+  bio: String
+}
+
+input UpdateUserInput {
+  username: String
+  email: String
+  fullName: String
+  bio: String
+  avatar: String
+  settings: UserSettingsInput
+}
+
+input UserSettingsInput {
+  theme: Theme
+  language: Language
+  emailNotifications: Boolean
+  pushNotifications: Boolean
+  privacy: PrivacyLevel
+}
+
+input CreatePostInput {
+  title: String!
+  content: String!
+  tags: [String!]
+  published: Boolean
+}
+
+input UpdatePostInput {
+  title: String
+  content: String
+  tags: [String!]
+  published: Boolean
+}
+
+type UserPayload {
+  user: User
+  errors: [Error!]
+}
+
+type PostPayload {
+  post: Post
+  errors: [Error!]
+}
+
+type DeletePayload {
+  success: Boolean!
+  message: String
+  errors: [Error!]
+}
+
+type Error {
+  field: String
+  message: String!
+}
+
+interface Node {
+  id: ID!
+}
+
+interface Connection {
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type UserConnection implements Connection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type UserEdge {
+  node: User!
+  cursor: String!
+}
+
+type PostConnection implements Connection {
+  edges: [PostEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PostEdge {
+  node: Post!
+  cursor: String!
+}
+
+type CommentConnection implements Connection {
+  edges: [CommentEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CommentEdge {
+  node: Comment!
+  cursor: String!
+}
+
+union SearchResult = User | Post | Comment
+
+type SearchResultConnection implements Connection {
+  edges: [SearchResultEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SearchResultEdge {
+  node: SearchResult!
+  cursor: String!
+}
+
+union TrendingItem = Post | User
+
+scalar DateTime
+scalar JSON

@@ -7,7 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/jzeiders/graphql-go-gen/internal/codegen"
-	"github.com/jzeiders/graphql-go-gen/internal/emit"
+	// Import the new plugins
+	ts_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript"
+	ts_ops_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript_operations"
+	tdn_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typed_document_node"
+	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
 	"github.com/jzeiders/graphql-go-gen/internal/loader"
 	"github.com/jzeiders/graphql-go-gen/internal/pluck"
 	"github.com/jzeiders/graphql-go-gen/pkg/config"
@@ -23,13 +27,21 @@ func runGenerate(cfg *config.Config) error {
 	// Create plugin registry and register built-in plugins
 	registry := plugin.NewRegistry()
 
-	// Register the new gqlparser-based plugins
-	if err := registry.Register(emit.NewTypeScriptPlugin()); err != nil {
+	// Register all built-in plugins
+	if err := registry.Register(ts_plugin.New()); err != nil {
 		return fmt.Errorf("registering typescript plugin: %w", err)
 	}
 
-	if err := registry.Register(emit.NewTypedDocumentNodePlugin()); err != nil {
+	if err := registry.Register(ts_ops_plugin.New()); err != nil {
+		return fmt.Errorf("registering typescript-operations plugin: %w", err)
+	}
+
+	if err := registry.Register(tdn_plugin.New()); err != nil {
 		return fmt.Errorf("registering typed-document-node plugin: %w", err)
+	}
+
+	if err := registry.Register(schema_ast_plugin.New()); err != nil {
+		return fmt.Errorf("registering schema-ast plugin: %w", err)
 	}
 
 	if !quiet {
@@ -242,11 +254,15 @@ func (g *Generator) generateTarget(ctx context.Context, outputPath string, targe
 
 		// Merge generated files
 		for path, content := range resp.Files {
-			// If path is relative, make it relative to the output path
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(filepath.Dir(outputPath), path)
+			// Use the path as-is if it's the same as the output path
+			if path == outputPath {
+				combinedFiles[path] = content
+			} else if !filepath.IsAbs(path) {
+				// If path is relative, make it relative to the output path
+				combinedFiles[filepath.Join(filepath.Dir(outputPath), path)] = content
+			} else {
+				combinedFiles[path] = content
 			}
-			combinedFiles[path] = content
 		}
 
 		// Log warnings

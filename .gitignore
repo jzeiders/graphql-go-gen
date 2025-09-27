@@ -45,3 +45,5 @@ coverage.html
 # Generated files
 testdata/**/__generated__/
 __generated__
+
+.benchmark-output/
