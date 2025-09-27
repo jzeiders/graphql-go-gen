@@ -1,0 +1,72 @@
+# Test GraphQL Operations
+
+query GetUser($id: ID!) {
+  user(id: $id) {
+    id
+    username
+    email
+    profile {
+      bio
+      avatarUrl
+      location
+    }
+    posts {
+      id
+      title
+      status
+    }
+  }
+}
+
+query ListUsers($limit: Int, $offset: Int) {
+  users(limit: $limit, offset: $offset) {
+    id
+    username
+    email
+    createdAt
+  }
+}
+
+mutation CreateUser($input: CreateUserInput!) {
+  createUser(input: $input) {
+    id
+    username
+    email
+    profile {
+      bio
+    }
+  }
+}
+
+mutation CreatePost($input: CreatePostInput!) {
+  createPost(input: $input) {
+    id
+    title
+    content
+    status
+    author {
+      id
+      username
+    }
+    tags
+    createdAt
+  }
+}
+
+fragment UserFields on User {
+  id
+  username
+  email
+  createdAt
+  updatedAt
+}
+
+fragment PostFields on Post {
+  id
+  title
+  content
+  status
+  tags
+  createdAt
+  updatedAt
+}

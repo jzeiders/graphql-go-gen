@@ -1,0 +1,97 @@
+# Example GraphQL Schema
+
+scalar DateTime
+scalar UUID
+
+type Query {
+  """
+  Get a user by ID
+  """
+  user(id: ID!): User
+
+  """
+  List all users
+  """
+  users(limit: Int = 10, offset: Int = 0): [User!]!
+
+  """
+  Search for posts
+  """
+  posts(query: String, authorId: ID): [Post!]!
+}
+
+type Mutation {
+  """
+  Create a new user
+  """
+  createUser(input: CreateUserInput!): User!
+
+  """
+  Update user profile
+  """
+  updateUser(id: ID!, input: UpdateUserInput!): User!
+
+  """
+  Create a new post
+  """
+  createPost(input: CreatePostInput!): Post!
+}
+
+type User {
+  id: ID!
+  username: String!
+  email: String!
+  profile: UserProfile
+  posts: [Post!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type UserProfile {
+  bio: String
+  avatarUrl: String
+  location: String
+}
+
+type Post {
+  id: ID!
+  title: String!
+  content: String!
+  author: User!
+  tags: [String!]!
+  status: PostStatus!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+input CreateUserInput {
+  username: String!
+  email: String!
+  profile: UserProfileInput
+}
+
+input UpdateUserInput {
+  username: String
+  email: String
+  profile: UserProfileInput
+}
+
+input UserProfileInput {
+  bio: String
+  avatarUrl: String
+  location: String
+}
+
+input CreatePostInput {
+  title: String!
+  content: String!
+  authorId: ID!
+  tags: [String!]
+  status: PostStatus = DRAFT
+}

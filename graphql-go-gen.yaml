@@ -1,0 +1,46 @@
+# GraphQL Go Gen Configuration
+
+# Schema sources - can be files, URLs, or introspection results
+schema:
+  - path: schema.graphql  # Local schema file
+  # - url: https://api.example.com/graphql  # Remote schema endpoint
+  #   headers:
+  #     Authorization: "Bearer ${GRAPHQL_TOKEN}"
+
+# Document sources - where to find GraphQL operations
+documents:
+  include:
+    - "**/*.graphql"
+    - "**/*.gql"
+    - "testdata/**/*.ts"
+    - "src/**/*.ts"
+    - "src/**/*.tsx"
+  exclude:
+    - "node_modules/**"
+    - "**/*.test.ts"
+    - "**/*.spec.ts"
+    - "src/__generated__/**"
+
+# Generation targets
+generates:
+  src/__generated__/types.ts:
+    plugins:
+      - typescript
+      - typed-document-node
+    config:
+      strictNulls: true
+      enumsAsTypes: true
+
+# Custom scalar type mappings
+scalars:
+  DateTime: string
+  UUID: string
+  JSON: any
+  Date: string
+  Time: string
+
+# Watch mode for development
+watch: false
+
+# Verbose output
+verbose: false
