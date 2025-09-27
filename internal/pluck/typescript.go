@@ -104,13 +104,8 @@ func (e *TypeScriptExtractor) ExtractFromString(content string, sourcePath strin
 		doc := &documents.Document{
 			FilePath: sourcePath,
 			Content:  extracted.content,
-			Hash:     documents.ComputeHash([]byte(extracted.content)),
-			SourceMap: &documents.SourceMap{
-				FilePath: sourcePath,
-				Locations: map[string]documents.Location{
-					"root": extracted.location,
-				},
-			},
+			Hash:     documents.ComputeDocumentHash([]byte(extracted.content)),
+			AST:      nil, // Will be parsed and validated later
 		}
 
 		// Parse the GraphQL content
@@ -126,7 +121,13 @@ func (e *TypeScriptExtractor) ExtractFromString(content string, sourcePath strin
 // extractedGraphQL represents an extracted GraphQL string
 type extractedGraphQL struct {
 	content  string
-	location documents.Location
+	location location
+}
+
+// location represents a position in the source
+type location struct {
+	line   int
+	column int
 }
 
 // scanner provides a simple scanner for TypeScript/JavaScript code
@@ -192,11 +193,10 @@ func (s *scanner) skipWhitespace() {
 }
 
 // location returns the current location
-func (s *scanner) location() documents.Location {
-	return documents.Location{
-		Line:   s.line,
-		Column: s.column,
-		Offset: s.pos,
+func (s *scanner) location() location {
+	return location{
+		line:   s.line,
+		column: s.column,
 	}
 }
 

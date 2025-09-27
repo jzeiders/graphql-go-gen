@@ -8,319 +8,236 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/language/ast"
-	"github.com/graphql-go/graphql/language/parser"
-	"github.com/graphql-go/graphql/language/source"
 	"github.com/jzeiders/graphql-go-gen/pkg/schema"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// FileSchemaLoader loads GraphQL schemas from files
+// FileSchemaLoader loads GraphQL schemas from files using gqlparser
 type FileSchemaLoader struct {
 	// Cache for loaded schemas
-	cache map[string]*fileSchema
+	cache map[string]schema.Schema
 }
 
 // NewFileSchemaLoader creates a new file-based schema loader
 func NewFileSchemaLoader() *FileSchemaLoader {
 	return &FileSchemaLoader{
-		cache: make(map[string]*fileSchema),
+		cache: make(map[string]schema.Schema),
 	}
-}
-
-// fileSchema implements the schema.Schema interface
-type fileSchema struct {
-	hash      string
-	document  *ast.Document
-	schema    graphql.Schema
-	typeMap   map[string]schema.Type
-	directives []*schema.Directive
 }
 
 // Load loads schema from multiple sources
 func (l *FileSchemaLoader) Load(ctx context.Context, sources []schema.Source) (schema.Schema, error) {
-	var documents []*ast.Document
+	var astSources []*ast.Source
 
 	for _, source := range sources {
 		switch source.Kind {
 		case "file":
-			doc, err := l.loadFile(source.Path)
+			content, err := l.readFile(source.Path)
 			if err != nil {
-				return nil, fmt.Errorf("loading schema from %s: %w", source.Path, err)
+				return nil, fmt.Errorf("reading schema file %s: %w", source.Path, err)
 			}
-			documents = append(documents, doc)
+			astSources = append(astSources, &ast.Source{
+				Name:  source.Path,
+				Input: content,
+			})
 
 		default:
 			return nil, fmt.Errorf("unsupported source kind: %s", source.Kind)
 		}
 	}
 
-	// Merge all documents into a single schema
-	mergedDoc := mergeDocuments(documents)
-
-	// Build the schema
-	s, err := buildSchema(mergedDoc)
+	// Load and validate the schema using gqlparser
+	astSchema, err := gqlparser.LoadSchema(astSources...)
 	if err != nil {
-		return nil, fmt.Errorf("building schema: %w", err)
+		return nil, fmt.Errorf("parsing schema: %w", err)
 	}
 
-	// Compute hash
-	hash := schema.ComputeHash([]byte(documentToString(mergedDoc)))
-
-	fs := &fileSchema{
-		hash:     hash,
-		document: mergedDoc,
-		schema:   s,
-		typeMap:  buildTypeMap(s),
+	// Create source name for tracking
+	sourceName := "merged"
+	if len(sources) == 1 {
+		sourceName = sources[0].Path
 	}
 
-	return fs, nil
+	return schema.NewSchema(astSchema, sourceName), nil
 }
 
 // LoadFromFile loads schema from a single file
 func (l *FileSchemaLoader) LoadFromFile(ctx context.Context, path string) (schema.Schema, error) {
-	doc, err := l.loadFile(path)
+	// Check cache
+	if cached, ok := l.cache[path]; ok {
+		return cached, nil
+	}
+
+	content, err := l.readFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading file: %w", err)
 	}
 
-	s, err := buildSchema(doc)
+	// Load schema using gqlparser
+	astSchema, err := gqlparser.LoadSchema(&ast.Source{
+		Name:  path,
+		Input: content,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("building schema: %w", err)
+		return nil, fmt.Errorf("parsing schema: %w", err)
 	}
 
-	hash := schema.ComputeHash([]byte(documentToString(doc)))
-
-	fs := &fileSchema{
-		hash:     hash,
-		document: doc,
-		schema:   s,
-		typeMap:  buildTypeMap(s),
-	}
-
-	return fs, nil
+	s := schema.NewSchema(astSchema, path)
+	l.cache[path] = s
+	return s, nil
 }
 
 // LoadFromURL is not implemented for file loader
 func (l *FileSchemaLoader) LoadFromURL(ctx context.Context, url string, headers map[string]string) (schema.Schema, error) {
-	return nil, fmt.Errorf("URL loading not supported by FileSchemaLoader")
+	return nil, fmt.Errorf("URL loading not supported by FileSchemaLoaderV2")
 }
 
-// LoadFromIntrospection is not implemented for file loader
-func (l *FileSchemaLoader) LoadFromIntrospection(ctx context.Context, data []byte) (schema.Schema, error) {
-	return nil, fmt.Errorf("introspection loading not supported by FileSchemaLoader")
+// LoadFromString loads schema from a string
+func (l *FileSchemaLoader) LoadFromString(ctx context.Context, schemaStr string, sourceName string) (schema.Schema, error) {
+	astSchema, err := gqlparser.LoadSchema(&ast.Source{
+		Name:  sourceName,
+		Input: schemaStr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("parsing schema: %w", err)
+	}
+
+	return schema.NewSchema(astSchema, sourceName), nil
 }
 
-// loadFile loads and parses a GraphQL schema file
-func (l *FileSchemaLoader) loadFile(path string) (*ast.Document, error) {
-	// Check if file has .graphql or .gql extension
+// readFile reads a schema file with support for .graphql, .gql, and .graphqls extensions
+func (l *FileSchemaLoader) readFile(path string) (string, error) {
+	// Check if file has appropriate extension
 	ext := filepath.Ext(path)
-	if ext != ".graphql" && ext != ".gql" {
-		return nil, fmt.Errorf("unsupported file extension: %s", ext)
+	validExts := map[string]bool{
+		".graphql":  true,
+		".gql":      true,
+		".graphqls": true,
+	}
+
+	if !validExts[ext] {
+		return "", fmt.Errorf("unsupported file extension: %s", ext)
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("opening file: %w", err)
+		return "", fmt.Errorf("opening file: %w", err)
 	}
 	defer file.Close()
 
 	content, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("reading file: %w", err)
+		return "", fmt.Errorf("reading file: %w", err)
 	}
 
-	src := source.NewSource(&source.Source{
-		Body: content,
-		Name: path,
-	})
+	return string(content), nil
+}
 
-	doc, err := parser.Parse(parser.ParseParams{Source: src})
+// LoadSchemaFromGlob loads schema from files matching glob patterns
+func LoadSchemaFromGlob(ctx context.Context, patterns []string) (schema.Schema, error) {
+	loader := NewFileSchemaLoader()
+	var sources []schema.Source
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid glob pattern %q: %w", pattern, err)
+		}
+
+		for _, match := range matches {
+			ext := filepath.Ext(match)
+			if ext == ".graphql" || ext == ".gql" || ext == ".graphqls" {
+				sources = append(sources, schema.Source{
+					ID:   schema.SourceID(match),
+					Kind: "file",
+					Path: match,
+				})
+			}
+		}
+	}
+
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("no schema files found matching patterns: %v", patterns)
+	}
+
+	return loader.Load(ctx, sources)
+}
+
+// MergeSchemas merges multiple schema strings into a single schema
+func MergeSchemas(ctx context.Context, schemas map[string]string) (schema.Schema, error) {
+	var sources []*ast.Source
+
+	for name, content := range schemas {
+		sources = append(sources, &ast.Source{
+			Name:  name,
+			Input: content,
+		})
+	}
+
+	astSchema, err := gqlparser.LoadSchema(sources...)
 	if err != nil {
-		return nil, fmt.Errorf("parsing GraphQL: %w", err)
+		return nil, fmt.Errorf("merging schemas: %w", err)
 	}
 
-	return doc, nil
+	sourceName := fmt.Sprintf("merged[%d]", len(schemas))
+	if len(schemas) == 1 {
+		for name := range schemas {
+			sourceName = name
+			break
+		}
+	}
+
+	return schema.NewSchema(astSchema, sourceName), nil
 }
 
-// mergeDocuments merges multiple AST documents into one
-func mergeDocuments(docs []*ast.Document) *ast.Document {
-	merged := &ast.Document{
-		Definitions: []ast.Node{},
-	}
-
-	for _, doc := range docs {
-		merged.Definitions = append(merged.Definitions, doc.Definitions...)
-	}
-
-	return merged
-}
-
-// buildSchema builds a graphql.Schema from an AST document
-func buildSchema(doc *ast.Document) (graphql.Schema, error) {
-	// Convert AST to SDL string for graphql-go
-	// sdl := documentToString(doc) // TODO: use for proper schema building
-
-	// Parse and build schema using graphql-go
-	schema, err := graphql.NewSchema(graphql.SchemaConfig{
-		Query: graphql.NewObject(graphql.ObjectConfig{
-			Name: "Query",
-			Fields: graphql.Fields{
-				"dummy": &graphql.Field{
-					Type: graphql.String,
-					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-						return "dummy", nil
-					},
-				},
-			},
-		}),
+// ValidateSchemaString validates a schema string without creating a Schema object
+func ValidateSchemaString(schemaStr string) error {
+	_, err := gqlparser.LoadSchema(&ast.Source{
+		Name:  "validation",
+		Input: schemaStr,
 	})
+	return err
+}
 
-	if err != nil {
-		return schema, fmt.Errorf("creating schema: %w", err)
+// GetSchemaIntrospection returns the introspection schema as a string
+func GetSchemaIntrospection(s schema.Schema) (string, error) {
+	if s == nil || s.Raw() == nil {
+		return "", fmt.Errorf("invalid schema")
 	}
 
-	// Note: In a real implementation, we would properly parse the SDL
-	// and build the schema with all types. This is a simplified version.
+	// Build introspection query result
+	var sb strings.Builder
+	astSchema := s.Raw()
 
-	return schema, nil
-}
+	sb.WriteString("# Schema Introspection\n\n")
 
-// buildTypeMap builds a map of type names to schema.Type
-func buildTypeMap(s graphql.Schema) map[string]schema.Type {
-	typeMap := make(map[string]schema.Type)
-
-	// Convert graphql-go types to our schema types
-	for name, gqlType := range s.TypeMap() {
-		typeMap[name] = convertType(gqlType)
+	// Write Query type
+	if astSchema.Query != nil {
+		sb.WriteString(fmt.Sprintf("type %s {\n", astSchema.Query.Name))
+		for _, field := range astSchema.Query.Fields {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", field.Name, field.Type.String()))
+		}
+		sb.WriteString("}\n\n")
 	}
 
-	return typeMap
-}
-
-// convertType converts a graphql-go type to our schema.Type
-func convertType(gqlType graphql.Type) schema.Type {
-	switch t := gqlType.(type) {
-	case *graphql.Object:
-		return &schema.Object{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-			// Fields would be converted here
+	// Write Mutation type
+	if astSchema.Mutation != nil {
+		sb.WriteString(fmt.Sprintf("type %s {\n", astSchema.Mutation.Name))
+		for _, field := range astSchema.Mutation.Fields {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", field.Name, field.Type.String()))
 		}
-	case *graphql.Interface:
-		return &schema.Interface{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-			// Fields would be converted here
-		}
-	case *graphql.Union:
-		return &schema.Union{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-			// Possible types would be converted here
-		}
-	case *graphql.Enum:
-		return &schema.Enum{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-			// Values would be converted here
-		}
-	case *graphql.InputObject:
-		return &schema.InputObject{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-			// Fields would be converted here
-		}
-	case *graphql.Scalar:
-		return &schema.Scalar{
-			TypeName: t.Name(),
-			Desc:     t.Description(),
-		}
-	case *graphql.List:
-		return &schema.List{
-			OfType: convertType(t.OfType),
-		}
-	case *graphql.NonNull:
-		return &schema.NonNull{
-			OfType: convertType(t.OfType),
-		}
-	default:
-		return nil
-	}
-}
-
-// documentToString converts an AST document to SDL string
-func documentToString(doc *ast.Document) string {
-	var parts []string
-
-	for range doc.Definitions {
-		// This would use the printer package in a real implementation
-		// For now, just return a placeholder
-		parts = append(parts, "# Schema definition")
+		sb.WriteString("}\n\n")
 	}
 
-	return strings.Join(parts, "\n\n")
-}
-
-// Implementation of schema.Schema interface for fileSchema
-
-func (s *fileSchema) Hash() string {
-	return s.hash
-}
-
-func (s *fileSchema) GetType(name string) schema.Type {
-	return s.typeMap[name]
-}
-
-func (s *fileSchema) GetQueryType() *schema.Object {
-	if queryType := s.schema.QueryType(); queryType != nil {
-		if obj, ok := s.typeMap[queryType.Name()].(*schema.Object); ok {
-			return obj
+	// Write Subscription type
+	if astSchema.Subscription != nil {
+		sb.WriteString(fmt.Sprintf("type %s {\n", astSchema.Subscription.Name))
+		for _, field := range astSchema.Subscription.Fields {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", field.Name, field.Type.String()))
 		}
+		sb.WriteString("}\n\n")
 	}
-	return nil
-}
 
-func (s *fileSchema) GetMutationType() *schema.Object {
-	if mutationType := s.schema.MutationType(); mutationType != nil {
-		if obj, ok := s.typeMap[mutationType.Name()].(*schema.Object); ok {
-			return obj
-		}
-	}
-	return nil
-}
-
-func (s *fileSchema) GetSubscriptionType() *schema.Object {
-	if subscriptionType := s.schema.SubscriptionType(); subscriptionType != nil {
-		if obj, ok := s.typeMap[subscriptionType.Name()].(*schema.Object); ok {
-			return obj
-		}
-	}
-	return nil
-}
-
-func (s *fileSchema) GetTypeMap() map[string]schema.Type {
-	return s.typeMap
-}
-
-func (s *fileSchema) GetDirective(name string) *schema.Directive {
-	for _, dir := range s.directives {
-		if dir.Name == name {
-			return dir
-		}
-	}
-	return nil
-}
-
-func (s *fileSchema) GetDirectives() []*schema.Directive {
-	return s.directives
-}
-
-func (s *fileSchema) ToAST() *ast.Document {
-	return s.document
-}
-
-func (s *fileSchema) Validate() error {
-	// The schema was already validated during parsing
-	return nil
+	return sb.String(), nil
 }

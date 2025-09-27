@@ -14,34 +14,16 @@ import (
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
 	"github.com/jzeiders/graphql-go-gen/pkg/schema"
-	"github.com/spf13/cobra"
 )
 
-// runGenerate executes the code generation
-func runGenerate(cmd *cobra.Command, args []string) error {
+// runGenerate executes the code generation using gqlparser
+func runGenerate(cfg *config.Config) error {
 	ctx := context.Background()
-
-	// Load configuration
-	if cfgFile == "" {
-		cfgFile = "graphql-go-gen.yaml"
-	}
-
-	if !quiet {
-		fmt.Printf("Loading config from: %s\n", cfgFile)
-	}
-
-	cfg, err := config.LoadFile(cfgFile)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	// Resolve relative paths
-	cfg.ResolveRelativePaths(cfgFile)
 
 	// Create plugin registry and register built-in plugins
 	registry := plugin.NewRegistry()
 
-	// Register built-in plugins
+	// Register the new gqlparser-based plugins
 	if err := registry.Register(emit.NewTypeScriptPlugin()); err != nil {
 		return fmt.Errorf("registering typescript plugin: %w", err)
 	}
@@ -65,7 +47,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	return gen.Generate(ctx)
 }
 
-// Generator handles the code generation process
+// Generator handles the code generation process using gqlparser
 type Generator struct {
 	config   *config.Config
 	registry plugin.Registry
@@ -77,7 +59,7 @@ type Generator struct {
 
 // Generate runs the complete generation pipeline
 func (g *Generator) Generate(ctx context.Context) error {
-	// Step 1: Load schema
+	// Step 1: Load schema using gqlparser
 	if !g.quiet {
 		fmt.Println("Loading schema...")
 	}
@@ -102,17 +84,31 @@ func (g *Generator) Generate(ctx context.Context) error {
 	g.schema = loadedSchema
 
 	if !g.quiet {
-		fmt.Printf("Schema loaded (hash: %s)\n", g.schema.Hash())
+		fmt.Printf("Schema loaded successfully (hash: %s)\n", g.schema.Hash())
+
+		// Show some schema info
+		if raw := g.schema.Raw(); raw != nil {
+			fmt.Printf("  Types: %d\n", len(raw.Types))
+			if raw.Query != nil {
+				fmt.Printf("  Query: %s\n", raw.Query.Name)
+			}
+			if raw.Mutation != nil {
+				fmt.Printf("  Mutation: %s\n", raw.Mutation.Name)
+			}
+			if raw.Subscription != nil {
+				fmt.Printf("  Subscription: %s\n", raw.Subscription.Name)
+			}
+		}
 	}
 
-	// Step 2: Load documents
+	// Step 2: Load documents with schema validation
 	if !g.quiet {
-		fmt.Println("Loading documents...")
+		fmt.Println("\nLoading documents...")
 	}
 
 	// Load GraphQL documents
 	gqlLoader := loader.NewGraphQLDocumentLoader()
-	gqlDocs, err := gqlLoader.Load(ctx, g.config.Documents.Include, g.config.Documents.Exclude)
+	gqlDocs, err := gqlLoader.Load(ctx, g.schema, g.config.Documents.Include, g.config.Documents.Exclude)
 	if err != nil {
 		return fmt.Errorf("loading GraphQL documents: %w", err)
 	}
@@ -132,10 +128,23 @@ func (g *Generator) Generate(ctx context.Context) error {
 				continue
 			}
 
+			// Check if should be excluded
+			shouldSkip := false
+			for _, excludePattern := range g.config.Documents.Exclude {
+				matched, _ := filepath.Match(excludePattern, path)
+				if matched {
+					shouldSkip = true
+					break
+				}
+			}
+			if shouldSkip {
+				continue
+			}
+
 			content, err := os.ReadFile(path)
 			if err != nil {
 				if g.verbose {
-					fmt.Printf("Warning: could not read %s: %v\n", path, err)
+					fmt.Printf("  Warning: could not read %s: %v\n", path, err)
 				}
 				continue
 			}
@@ -143,12 +152,24 @@ func (g *Generator) Generate(ctx context.Context) error {
 			extracted, err := tsExtractor.Extract(ctx, path, content)
 			if err != nil {
 				if g.verbose {
-					fmt.Printf("Warning: could not extract from %s: %v\n", path, err)
+					fmt.Printf("  Warning: could not extract from %s: %v\n", path, err)
 				}
 				continue
 			}
 
-			tsDocs = append(tsDocs, extracted...)
+			// Validate each extracted document against schema
+			for _, extractedDoc := range extracted {
+				// Use the V2 loader to validate the extracted GraphQL
+				docLoader := loader.NewGraphQLDocumentLoader()
+				validatedDoc, err := docLoader.LoadString(ctx, g.schema, extractedDoc.Content, extractedDoc.FilePath)
+				if err != nil {
+					if g.verbose {
+						fmt.Printf("  Warning: invalid GraphQL in %s: %v\n", extractedDoc.FilePath, err)
+					}
+					continue
+				}
+				tsDocs = append(tsDocs, validatedDoc)
+			}
 		}
 	}
 
@@ -158,6 +179,12 @@ func (g *Generator) Generate(ctx context.Context) error {
 	if !g.quiet {
 		fmt.Printf("Found %d documents (%d from .graphql/.gql, %d from TypeScript)\n",
 			len(g.docs), len(gqlDocs), len(tsDocs))
+
+		// Show operation details
+		allOps := documents.CollectAllOperations(g.docs)
+		allFrags := documents.CollectAllFragments(g.docs)
+		fmt.Printf("  Operations: %d\n", len(allOps))
+		fmt.Printf("  Fragments: %d\n", len(allFrags))
 	}
 
 	// Step 3: Generate code for each output target
@@ -238,7 +265,7 @@ func (g *Generator) generateTarget(ctx context.Context, outputPath string, targe
 		}
 
 		if !g.quiet {
-			fmt.Printf("  Generated: %s\n", path)
+			fmt.Printf("  Generated: %s (%d bytes)\n", path, len(content))
 		}
 	}
 

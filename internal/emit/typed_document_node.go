@@ -1,12 +1,15 @@
 package emit
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"strings"
 
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/formatter"
 )
 
 // TypedDocumentNodePlugin generates TypedDocumentNode exports for GraphQL operations
@@ -40,31 +43,22 @@ func (p *TypedDocumentNodePlugin) Generate(ctx context.Context, req *plugin.Gene
 	sb.WriteString("import { print } from 'graphql';\n")
 	sb.WriteString("import gql from 'graphql-tag';\n\n")
 
-	// Import types (assuming they're generated in the same directory)
-	hasOperations := false
-	for _, doc := range req.Documents {
-		if len(doc.Operations) > 0 {
-			hasOperations = true
-			break
-		}
-	}
+	// Collect all operations and fragments
+	allOps := documents.CollectAllOperations(req.Documents)
+	allFrags := documents.CollectAllFragments(req.Documents)
+
+	hasOperations := len(allOps) > 0
 
 	if hasOperations {
 		sb.WriteString("import type {\n")
 
-		// Collect all operations for import
-		var operations []*documents.Operation
-		for _, doc := range req.Documents {
-			operations = append(operations, doc.Operations...)
-		}
-
 		// Sort operations by name
-		sort.Slice(operations, func(i, j int) bool {
-			return operations[i].Name < operations[j].Name
+		sort.Slice(allOps, func(i, j int) bool {
+			return allOps[i].Name < allOps[j].Name
 		})
 
 		// Generate imports
-		for _, op := range operations {
+		for _, op := range allOps {
 			if op.Name == "" {
 				continue
 			}
@@ -80,14 +74,9 @@ func (p *TypedDocumentNodePlugin) Generate(ctx context.Context, req *plugin.Gene
 	}
 
 	// Generate fragments first (if any)
-	var allFragments []*documents.Fragment
-	for _, doc := range req.Documents {
-		allFragments = append(allFragments, doc.Fragments...)
-	}
-
-	if len(allFragments) > 0 {
+	if len(allFrags) > 0 {
 		sb.WriteString("// Fragment definitions\n")
-		p.generateFragments(&sb, allFragments)
+		p.generateFragments(&sb, allFrags)
 		sb.WriteString("\n")
 	}
 
@@ -108,8 +97,8 @@ func (p *TypedDocumentNodePlugin) Generate(ctx context.Context, req *plugin.Gene
 // DefaultConfig returns the default configuration
 func (p *TypedDocumentNodePlugin) DefaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"documentMode":     "TypedDocumentNode", // or "string" for just the query strings
-		"dedupeFragments":  true,
+		"documentMode":          "TypedDocumentNode",
+		"dedupeFragments":       true,
 		"flattenGeneratedTypes": false,
 	}
 }
@@ -121,7 +110,7 @@ func (p *TypedDocumentNodePlugin) ValidateConfig(config map[string]interface{}) 
 }
 
 // generateFragments generates fragment definitions
-func (p *TypedDocumentNodePlugin) generateFragments(sb *strings.Builder, fragments []*documents.Fragment) {
+func (p *TypedDocumentNodePlugin) generateFragments(sb *strings.Builder, fragments []*ast.FragmentDefinition) {
 	// Sort fragments by name for consistent output
 	sort.Slice(fragments, func(i, j int) bool {
 		return fragments[i].Name < fragments[j].Name
@@ -132,14 +121,23 @@ func (p *TypedDocumentNodePlugin) generateFragments(sb *strings.Builder, fragmen
 		sb.WriteString("export const ")
 		sb.WriteString(frag.Name)
 		sb.WriteString("Fragment = gql`\n")
-		sb.WriteString("  fragment ")
-		sb.WriteString(frag.Name)
-		sb.WriteString(" on ")
-		sb.WriteString(frag.TypeCondition)
-		sb.WriteString(" {\n")
-		sb.WriteString("    # Fragment fields would go here\n")
-		sb.WriteString("    __typename\n")
-		sb.WriteString("  }\n")
+
+		// Format the fragment using gqlparser's formatter
+		var fragBuf bytes.Buffer
+		formatter.NewFormatter(&fragBuf).FormatQueryDocument(&ast.QueryDocument{
+			Fragments: []*ast.FragmentDefinition{frag},
+		})
+
+		// Indent the output
+		lines := strings.Split(fragBuf.String(), "\n")
+		for _, line := range lines {
+			if line != "" {
+				sb.WriteString("  ")
+				sb.WriteString(line)
+				sb.WriteString("\n")
+			}
+		}
+
 		sb.WriteString("`;\n\n")
 	}
 }
@@ -147,30 +145,15 @@ func (p *TypedDocumentNodePlugin) generateFragments(sb *strings.Builder, fragmen
 // generateOperations generates operation definitions
 func (p *TypedDocumentNodePlugin) generateOperations(sb *strings.Builder, docs []*documents.Document) {
 	// Collect all operations
-	type operationWithSource struct {
-		op     *documents.Operation
-		source string
-	}
-
-	var operations []operationWithSource
-
-	for _, doc := range docs {
-		for _, op := range doc.Operations {
-			operations = append(operations, operationWithSource{
-				op:     op,
-				source: doc.Content,
-			})
-		}
-	}
+	allOps := documents.CollectAllOperations(docs)
 
 	// Sort operations by name for consistent output
-	sort.Slice(operations, func(i, j int) bool {
-		return operations[i].op.Name < operations[j].op.Name
+	sort.Slice(allOps, func(i, j int) bool {
+		return allOps[i].Name < allOps[j].Name
 	})
 
 	// Generate TypedDocumentNode for each operation
-	for _, item := range operations {
-		op := item.op
+	for _, op := range allOps {
 		if op.Name == "" {
 			continue // Skip anonymous operations
 		}
@@ -180,37 +163,23 @@ func (p *TypedDocumentNodePlugin) generateOperations(sb *strings.Builder, docs [
 		sb.WriteString(op.Name)
 		sb.WriteString("Document = gql`\n")
 
-		// Try to extract the operation from source if available
-		if item.source != "" && strings.Contains(item.source, op.Name) {
-			// Find and include the actual operation text
-			sb.WriteString(indentString(extractOperationText(item.source, op.Name), "  "))
-		} else {
-			// Fallback: generate a placeholder
-			sb.WriteString("  ")
-			sb.WriteString(string(op.Type))
-			sb.WriteString(" ")
-			sb.WriteString(op.Name)
+		// Format the operation using gqlparser's formatter
+		var opBuf bytes.Buffer
+		formatter.NewFormatter(&opBuf).FormatQueryDocument(&ast.QueryDocument{
+			Operations: []*ast.OperationDefinition{op},
+		})
 
-			if len(op.Variables) > 0 {
-				sb.WriteString("(")
-				for i, v := range op.Variables {
-					if i > 0 {
-						sb.WriteString(", ")
-					}
-					sb.WriteString("$")
-					sb.WriteString(v.Name)
-					sb.WriteString(": ")
-					sb.WriteString(v.Type)
-				}
-				sb.WriteString(")")
+		// Indent the output
+		lines := strings.Split(opBuf.String(), "\n")
+		for _, line := range lines {
+			if line != "" {
+				sb.WriteString("  ")
+				sb.WriteString(line)
+				sb.WriteString("\n")
 			}
-
-			sb.WriteString(" {\n")
-			sb.WriteString("    # Operation selection set would go here\n")
-			sb.WriteString("  }")
 		}
 
-		sb.WriteString("\n`;\n\n")
+		sb.WriteString("`;\n\n")
 
 		// Export as TypedDocumentNode
 		sb.WriteString("export const ")
@@ -225,66 +194,28 @@ func (p *TypedDocumentNodePlugin) generateOperations(sb *strings.Builder, docs [
 	}
 }
 
-// extractOperationText attempts to extract the operation text from source
-func extractOperationText(source, operationName string) string {
-	// Find the operation in the source
-	index := strings.Index(source, operationName)
-	if index == -1 {
-		return "# Operation not found in source"
+// Helper function to get operation source with fragments
+func getOperationSource(op *ast.OperationDefinition, fragments []*ast.FragmentDefinition) string {
+	// Find used fragments
+	usedFragments := documents.GetUsedFragments(op.SelectionSet)
+
+	// Build a document with the operation and its fragments
+	doc := &ast.QueryDocument{
+		Operations: []*ast.OperationDefinition{op},
+		Fragments:  make([]*ast.FragmentDefinition, 0),
 	}
 
-	// Try to find the start of the operation (query/mutation/subscription keyword)
-	start := index
-	for i := index - 1; i >= 0; i-- {
-		if strings.HasPrefix(source[i:], "query") ||
-			strings.HasPrefix(source[i:], "mutation") ||
-			strings.HasPrefix(source[i:], "subscription") ||
-			strings.HasPrefix(source[i:], "fragment") {
-			start = i
-			break
-		}
-	}
-
-	// Find the matching closing brace
-	braceCount := 0
-	inString := false
-	end := start
-
-	for i := start; i < len(source); i++ {
-		ch := source[i]
-
-		// Handle string literals
-		if ch == '"' && (i == 0 || source[i-1] != '\\') {
-			inString = !inString
-		}
-
-		if !inString {
-			if ch == '{' {
-				braceCount++
-			} else if ch == '}' {
-				braceCount--
-				if braceCount == 0 {
-					end = i + 1
-					break
-				}
+	for _, fragName := range usedFragments {
+		for _, frag := range fragments {
+			if frag.Name == fragName {
+				doc.Fragments = append(doc.Fragments, frag)
+				break
 			}
 		}
 	}
 
-	if end > start {
-		return strings.TrimSpace(source[start:end])
-	}
-
-	return "# Could not extract operation"
-}
-
-// indentString adds indentation to each line of a string
-func indentString(s, indent string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = indent + line
-		}
-	}
-	return strings.Join(lines, "\n")
+	// Format the complete document
+	var buf bytes.Buffer
+	formatter.NewFormatter(&buf).FormatQueryDocument(doc)
+	return buf.String()
 }

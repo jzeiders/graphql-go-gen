@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jzeiders/graphql-go-gen/pkg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +27,26 @@ var generateCmd = &cobra.Command{
 	Short: "Generate code from GraphQL schema and operations",
 	Long: `Generate type-safe code from GraphQL schemas and operations.
 Extracts operations from TypeScript/JavaScript and .gql/.graphql files.`,
-	RunE: runGenerate,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if cfgFile == "" {
+			cfgFile = "graphql-go-gen.yaml"
+		}
+
+		if !quiet {
+			fmt.Printf("Loading config from: %s\n", cfgFile)
+		}
+
+		cfg, err := config.LoadFile(cfgFile)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		// Resolve relative paths
+		cfg.ResolveRelativePaths(cfgFile)
+
+		// Use the generator with gqlparser
+		return runGenerate(cfg)
+	},
 }
 
 func init() {

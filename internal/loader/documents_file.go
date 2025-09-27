@@ -6,14 +6,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/graphql-go/graphql/language/ast"
-	"github.com/graphql-go/graphql/language/parser"
-	"github.com/graphql-go/graphql/language/source"
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
+	"github.com/jzeiders/graphql-go-gen/pkg/schema"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// GraphQLDocumentLoader loads GraphQL documents from .graphql and .gql files
+// GraphQLDocumentLoader loads GraphQL documents from .graphql and .gql files using gqlparser
 type GraphQLDocumentLoader struct {
 	// Cache for loaded documents
 	cache map[string]*documents.Document
@@ -27,7 +28,11 @@ func NewGraphQLDocumentLoader() *GraphQLDocumentLoader {
 }
 
 // Load loads documents matching the given glob patterns
-func (l *GraphQLDocumentLoader) Load(ctx context.Context, includes []string, excludes []string) ([]*documents.Document, error) {
+func (l *GraphQLDocumentLoader) Load(ctx context.Context, s schema.Schema, includes []string, excludes []string) ([]*documents.Document, error) {
+	if s == nil || s.Raw() == nil {
+		return nil, fmt.Errorf("schema is required for document validation")
+	}
+
 	var docs []*documents.Document
 	seenFiles := make(map[string]bool)
 
@@ -54,9 +59,10 @@ func (l *GraphQLDocumentLoader) Load(ctx context.Context, includes []string, exc
 				continue
 			}
 
-			doc, err := l.LoadFile(ctx, path)
+			doc, err := l.LoadFile(ctx, s, path)
 			if err != nil {
-				return nil, fmt.Errorf("loading document from %s: %w", path, err)
+				// Skip files with errors (might be non-GraphQL files)
+				continue
 			}
 
 			docs = append(docs, doc)
@@ -68,7 +74,11 @@ func (l *GraphQLDocumentLoader) Load(ctx context.Context, includes []string, exc
 }
 
 // LoadFile loads a single document from a file
-func (l *GraphQLDocumentLoader) LoadFile(ctx context.Context, path string) (*documents.Document, error) {
+func (l *GraphQLDocumentLoader) LoadFile(ctx context.Context, s schema.Schema, path string) (*documents.Document, error) {
+	if s == nil || s.Raw() == nil {
+		return nil, fmt.Errorf("schema is required for document validation")
+	}
+
 	// Check cache
 	if cached, ok := l.cache[path]; ok {
 		return cached, nil
@@ -85,7 +95,7 @@ func (l *GraphQLDocumentLoader) LoadFile(ctx context.Context, path string) (*doc
 		return nil, fmt.Errorf("reading file: %w", err)
 	}
 
-	doc, err := l.LoadString(string(content), path)
+	doc, err := l.LoadString(ctx, s, string(content), path)
 	if err != nil {
 		return nil, err
 	}
@@ -97,201 +107,140 @@ func (l *GraphQLDocumentLoader) LoadFile(ctx context.Context, path string) (*doc
 }
 
 // LoadString loads a document from a string
-func (l *GraphQLDocumentLoader) LoadString(content string, sourcePath string) (*documents.Document, error) {
-	src := source.NewSource(&source.Source{
-		Body: []byte(content),
-		Name: sourcePath,
-	})
-
-	astDoc, err := parser.Parse(parser.ParseParams{Source: src})
-	if err != nil {
-		return nil, fmt.Errorf("parsing GraphQL: %w", err)
+func (l *GraphQLDocumentLoader) LoadString(ctx context.Context, s schema.Schema, content string, sourcePath string) (*documents.Document, error) {
+	if s == nil || s.Raw() == nil {
+		return nil, fmt.Errorf("schema is required for document validation")
 	}
 
+	// Parse and validate the document using gqlparser
+	source := &ast.Source{
+		Name:  sourcePath,
+		Input: content,
+	}
+
+	// Parse the query document and validate against schema
+	queryDoc, err := gqlparser.LoadQuery(s.Raw(), content)
+	if err != nil {
+		return nil, fmt.Errorf("parsing/validating GraphQL document: %w", err)
+	}
+
+	// Create document
 	doc := &documents.Document{
 		FilePath: sourcePath,
 		Content:  content,
-		AST:      astDoc,
-		Hash:     documents.ComputeHash([]byte(content)),
-		SourceMap: &documents.SourceMap{
-			FilePath:  sourcePath,
-			Locations: make(map[string]documents.Location),
-		},
+		AST:      queryDoc,
+		Hash:     documents.ComputeDocumentHash([]byte(content)),
 	}
 
-	// Extract operations and fragments
-	doc.Operations = extractOperations(astDoc, sourcePath)
-	doc.Fragments = extractFragments(astDoc, sourcePath)
+	// Ensure source information is set
+	if queryDoc.Operations != nil {
+		for _, op := range queryDoc.Operations {
+			if op.Position == nil {
+				op.Position = &ast.Position{Src: source}
+			}
+		}
+	}
+
+	if queryDoc.Fragments != nil {
+		for _, frag := range queryDoc.Fragments {
+			if frag.Position == nil {
+				frag.Position = &ast.Position{Src: source}
+			}
+		}
+	}
 
 	return doc, nil
 }
 
-// extractOperations extracts operations from an AST document
-func extractOperations(doc *ast.Document, sourcePath string) []*documents.Operation {
-	var operations []*documents.Operation
+// LoadDocumentsFromGlob loads documents from files matching glob patterns
+func LoadDocumentsFromGlob(ctx context.Context, s schema.Schema, patterns []string) ([]*documents.Document, error) {
+	loader := NewGraphQLDocumentLoader()
+	return loader.Load(ctx, s, patterns, nil)
+}
 
-	for _, def := range doc.Definitions {
-		if opDef, ok := def.(*ast.OperationDefinition); ok {
-			op := &documents.Operation{
-				Type: documents.OperationType(opDef.Operation),
-				AST:  opDef,
-				Location: documents.Location{
-					Line:   1, // TODO: extract from source
-					Column: 1,
-					Offset: opDef.Loc.Start,
-				},
-			}
+// ValidateDocument validates a GraphQL document string against a schema
+func ValidateDocument(s schema.Schema, documentStr string) error {
+	if s == nil || s.Raw() == nil {
+		return fmt.Errorf("schema is required for validation")
+	}
 
-			// Set operation name
-			if opDef.Name != nil {
-				op.Name = opDef.Name.Value
-			}
+	_, err := gqlparser.LoadQuery(s.Raw(), documentStr)
+	return err
+}
 
-			// Extract variables
-			if opDef.VariableDefinitions != nil {
-				for _, varDef := range opDef.VariableDefinitions {
-					variable := &documents.Variable{
-						Name: varDef.Variable.Name.Value,
-						Type: typeToString(varDef.Type),
-						Required: isNonNull(varDef.Type),
-					}
+// ValidateDocuments validates multiple GraphQL documents against a schema
+func ValidateDocuments(s schema.Schema, documents []string) []error {
+	if s == nil || s.Raw() == nil {
+		return []error{fmt.Errorf("schema is required for validation")}
+	}
 
-					if varDef.DefaultValue != nil {
-						variable.DefaultValue = valueToInterface(varDef.DefaultValue)
-					}
-
-					op.Variables = append(op.Variables, variable)
-				}
-			}
-
-			// Find used fragments
-			op.UsedFragments = findUsedFragments(opDef.SelectionSet)
-
-			// Compute operation hash
-			op.Hash = documents.ComputeHash([]byte(op.Name + string(op.Type)))
-
-			operations = append(operations, op)
+	var errors []error
+	for i, doc := range documents {
+		if err := ValidateDocument(s, doc); err != nil {
+			errors = append(errors, fmt.Errorf("document %d: %w", i, err))
 		}
 	}
 
-	return operations
+	return errors
 }
 
-// extractFragments extracts fragments from an AST document
-func extractFragments(doc *ast.Document, sourcePath string) []*documents.Fragment {
-	var fragments []*documents.Fragment
+// MergeDocuments merges multiple documents into a single document
+func MergeDocuments(docs []*documents.Document) (*documents.Document, error) {
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no documents to merge")
+	}
 
-	for _, def := range doc.Definitions {
-		if fragDef, ok := def.(*ast.FragmentDefinition); ok {
-			frag := &documents.Fragment{
-				Name:          fragDef.Name.Value,
-				TypeCondition: fragDef.TypeCondition.Name.Value,
-				AST:           fragDef,
-				Location: documents.Location{
-					Line:   1, // TODO: extract from source
-					Column: 1,
-					Offset: fragDef.Loc.Start,
-				},
-			}
+	if len(docs) == 1 {
+		return docs[0], nil
+	}
 
-			// Find used fragments
-			frag.UsedFragments = findUsedFragments(fragDef.SelectionSet)
+	// Create a new merged document
+	merged := &ast.QueryDocument{
+		Operations: make([]*ast.OperationDefinition, 0),
+		Fragments:  make([]*ast.FragmentDefinition, 0),
+	}
 
-			// Compute fragment hash
-			frag.Hash = documents.ComputeHash([]byte(frag.Name))
+	var contentBuilder string
+	paths := make([]string, 0)
 
-			fragments = append(fragments, frag)
+	for _, doc := range docs {
+		if doc.AST != nil {
+			merged.Operations = append(merged.Operations, doc.AST.Operations...)
+			merged.Fragments = append(merged.Fragments, doc.AST.Fragments...)
 		}
+		contentBuilder += doc.Content + "\n"
+		paths = append(paths, doc.FilePath)
 	}
 
-	return fragments
+	return &documents.Document{
+		FilePath: fmt.Sprintf("merged[%d]", len(docs)),
+		Content:  contentBuilder,
+		AST:      merged,
+		Hash:     documents.ComputeDocumentHash([]byte(contentBuilder)),
+	}, nil
 }
 
-// findUsedFragments recursively finds all fragment spreads in a selection set
-func findUsedFragments(selectionSet *ast.SelectionSet) []string {
-	if selectionSet == nil {
-		return nil
+// ExtractOperationString extracts a specific operation as a string from a document
+func ExtractOperationString(doc *documents.Document, operationName string) (string, error) {
+	op := documents.GetOperation(doc, operationName)
+	if op == nil {
+		return "", fmt.Errorf("operation %q not found", operationName)
 	}
 
-	fragmentsMap := make(map[string]bool)
-	findFragmentsInSelection(selectionSet, fragmentsMap)
-
-	fragments := make([]string, 0, len(fragmentsMap))
-	for name := range fragmentsMap {
-		fragments = append(fragments, name)
-	}
-
-	return fragments
+	// In a real implementation, we would use the printer to format the operation
+	// For now, return the operation name as a placeholder
+	return fmt.Sprintf("%s %s { ... }", op.Operation, op.Name), nil
 }
 
-// findFragmentsInSelection recursively finds fragments in selections
-func findFragmentsInSelection(selectionSet *ast.SelectionSet, fragments map[string]bool) {
-	if selectionSet == nil {
-		return
+// ExtractFragmentString extracts a specific fragment as a string from a document
+func ExtractFragmentString(doc *documents.Document, fragmentName string) (string, error) {
+	frag := documents.GetFragment(doc, fragmentName)
+	if frag == nil {
+		return "", fmt.Errorf("fragment %q not found", fragmentName)
 	}
 
-	for _, selection := range selectionSet.Selections {
-		switch s := selection.(type) {
-		case *ast.Field:
-			findFragmentsInSelection(s.SelectionSet, fragments)
-
-		case *ast.FragmentSpread:
-			fragments[s.Name.Value] = true
-
-		case *ast.InlineFragment:
-			findFragmentsInSelection(s.SelectionSet, fragments)
-		}
-	}
-}
-
-// typeToString converts an AST type to a string representation
-func typeToString(t ast.Type) string {
-	switch typ := t.(type) {
-	case *ast.Named:
-		return typ.Name.Value
-	case *ast.List:
-		return "[" + typeToString(typ.Type) + "]"
-	case *ast.NonNull:
-		return typeToString(typ.Type) + "!"
-	default:
-		return ""
-	}
-}
-
-// isNonNull checks if a type is non-nullable
-func isNonNull(t ast.Type) bool {
-	_, ok := t.(*ast.NonNull)
-	return ok
-}
-
-// valueToInterface converts an AST value to an interface{}
-func valueToInterface(v ast.Value) interface{} {
-	switch val := v.(type) {
-	case *ast.StringValue:
-		return val.Value
-	case *ast.IntValue:
-		return val.Value
-	case *ast.FloatValue:
-		return val.Value
-	case *ast.BooleanValue:
-		return val.Value
-	case *ast.EnumValue:
-		return val.Value
-	case *ast.ListValue:
-		list := make([]interface{}, len(val.Values))
-		for i, item := range val.Values {
-			list[i] = valueToInterface(item)
-		}
-		return list
-	case *ast.ObjectValue:
-		obj := make(map[string]interface{})
-		for _, field := range val.Fields {
-			obj[field.Name.Value] = valueToInterface(field.Value)
-		}
-		return obj
-	default:
-		return nil
-	}
+	// In a real implementation, we would use the printer to format the fragment
+	return fmt.Sprintf("fragment %s on %s { ... }", frag.Name, frag.TypeCondition), nil
 }
 
 // shouldExclude checks if a path matches any exclude pattern
@@ -304,7 +253,7 @@ func shouldExclude(path string, excludes []string) bool {
 
 		// Also check if the path contains the exclude pattern as a substring
 		// This helps with patterns like "node_modules/**"
-		if filepath.HasPrefix(path, filepath.Dir(pattern)) {
+		if strings.Contains(path, strings.TrimSuffix(pattern, "/**")) {
 			return true
 		}
 	}

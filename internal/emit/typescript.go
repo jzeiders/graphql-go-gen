@@ -2,15 +2,16 @@ package emit
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
-	"github.com/jzeiders/graphql-go-gen/pkg/schema"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// TypeScriptPlugin generates TypeScript type definitions from GraphQL schema
+// TypeScriptPlugin generates TypeScript type definitions from GraphQL schema using gqlparser
 type TypeScriptPlugin struct{}
 
 // NewTypeScriptPlugin creates a new TypeScript plugin
@@ -40,42 +41,46 @@ func (p *TypeScriptPlugin) Generate(ctx context.Context, req *plugin.GenerateReq
 	strictNulls := req.Options.StrictNulls
 	enumsAsTypes := req.Options.EnumsAsTypes
 
+	if req.Schema == nil || req.Schema.Raw() == nil {
+		return nil, fmt.Errorf("schema is required")
+	}
+
+	astSchema := req.Schema.Raw()
+
 	// Generate scalar type mappings
 	sb.WriteString("// Scalar type mappings\n")
-	p.generateScalarTypes(&sb, req.ScalarMap)
+	p.generateScalarTypes(&sb, astSchema, req.ScalarMap)
 	sb.WriteString("\n")
 
 	// Generate enum types
-	if req.Schema != nil {
-		sb.WriteString("// Enum types\n")
-		p.generateEnumTypes(&sb, req.Schema, enumsAsTypes)
-		sb.WriteString("\n")
+	sb.WriteString("// Enum types\n")
+	p.generateEnumTypes(&sb, astSchema, enumsAsTypes)
+	sb.WriteString("\n")
 
-		// Generate input types
-		sb.WriteString("// Input types\n")
-		p.generateInputTypes(&sb, req.Schema, strictNulls, req.ScalarMap)
-		sb.WriteString("\n")
+	// Generate input types
+	sb.WriteString("// Input types\n")
+	p.generateInputTypes(&sb, astSchema, strictNulls, req.ScalarMap)
+	sb.WriteString("\n")
 
-		// Generate object types
-		sb.WriteString("// Object types\n")
-		p.generateObjectTypes(&sb, req.Schema, strictNulls, req.ScalarMap)
-		sb.WriteString("\n")
+	// Generate object types
+	sb.WriteString("// Object types\n")
+	p.generateObjectTypes(&sb, astSchema, strictNulls, req.ScalarMap)
+	sb.WriteString("\n")
 
-		// Generate interface types
-		sb.WriteString("// Interface types\n")
-		p.generateInterfaceTypes(&sb, req.Schema, strictNulls, req.ScalarMap)
-		sb.WriteString("\n")
+	// Generate interface types
+	sb.WriteString("// Interface types\n")
+	p.generateInterfaceTypes(&sb, astSchema, strictNulls, req.ScalarMap)
+	sb.WriteString("\n")
 
-		// Generate union types
-		sb.WriteString("// Union types\n")
-		p.generateUnionTypes(&sb, req.Schema)
-		sb.WriteString("\n")
-	}
+	// Generate union types
+	sb.WriteString("// Union types\n")
+	p.generateUnionTypes(&sb, astSchema)
+	sb.WriteString("\n")
 
 	// Generate operation types if we have documents
 	if len(req.Documents) > 0 {
 		sb.WriteString("// Operation types\n")
-		p.generateOperationTypes(&sb, req.Documents, req.Schema, strictNulls, req.ScalarMap)
+		p.generateOperationTypes(&sb, req.Documents, astSchema, strictNulls, req.ScalarMap)
 	}
 
 	// Return the generated code
@@ -93,7 +98,7 @@ func (p *TypeScriptPlugin) DefaultConfig() map[string]interface{} {
 		"enumsAsTypes":   false,
 		"immutableTypes": false,
 		"namingConvention": map[string]string{
-			"typeNames": "PascalCase",
+			"typeNames":  "PascalCase",
 			"enumValues": "SCREAMING_SNAKE_CASE",
 		},
 	}
@@ -106,7 +111,7 @@ func (p *TypeScriptPlugin) ValidateConfig(config map[string]interface{}) error {
 }
 
 // generateScalarTypes generates TypeScript type aliases for custom scalars
-func (p *TypeScriptPlugin) generateScalarTypes(sb *strings.Builder, scalarMap map[string]string) {
+func (p *TypeScriptPlugin) generateScalarTypes(sb *strings.Builder, s *ast.Schema, scalarMap map[string]string) {
 	// Default scalar mappings
 	defaultScalars := map[string]string{
 		"ID":      "string",
@@ -116,25 +121,24 @@ func (p *TypeScriptPlugin) generateScalarTypes(sb *strings.Builder, scalarMap ma
 		"Boolean": "boolean",
 	}
 
-	// Merge custom scalars with defaults
-	allScalars := make(map[string]string)
-	for k, v := range defaultScalars {
-		allScalars[k] = v
-	}
-	for k, v := range scalarMap {
-		allScalars[k] = v
+	// Collect custom scalars from schema
+	var customScalars []string
+	for name, def := range s.Types {
+		if def.Kind == ast.Scalar && defaultScalars[name] == "" && !strings.HasPrefix(name, "__") {
+			customScalars = append(customScalars, name)
+		}
 	}
 
-	// Sort scalar names for consistent output
-	var scalarNames []string
-	for name := range scalarMap {
-		scalarNames = append(scalarNames, name)
-	}
-	sort.Strings(scalarNames)
+	// Sort for consistent output
+	sort.Strings(customScalars)
 
-	// Generate type aliases for custom scalars only
-	for _, name := range scalarNames {
-		tsType := allScalars[name]
+	// Generate type aliases for custom scalars
+	for _, name := range customScalars {
+		tsType := "any" // Default type
+		if mapped, ok := scalarMap[name]; ok {
+			tsType = mapped
+		}
+
 		sb.WriteString("export type ")
 		sb.WriteString(name)
 		sb.WriteString(" = ")
@@ -144,19 +148,13 @@ func (p *TypeScriptPlugin) generateScalarTypes(sb *strings.Builder, scalarMap ma
 }
 
 // generateEnumTypes generates TypeScript enum types
-func (p *TypeScriptPlugin) generateEnumTypes(sb *strings.Builder, s schema.Schema, enumsAsTypes bool) {
-	if s == nil {
-		return
-	}
-
-	typeMap := s.GetTypeMap()
+func (p *TypeScriptPlugin) generateEnumTypes(sb *strings.Builder, s *ast.Schema, enumsAsTypes bool) {
 	var enumNames []string
 
 	// Collect all enum types
-	for name, t := range typeMap {
-		if enum, ok := t.(*schema.Enum); ok {
+	for name, def := range s.Types {
+		if def.Kind == ast.Enum && !strings.HasPrefix(name, "__") {
 			enumNames = append(enumNames, name)
-			_ = enum // Will be used when we have enum values
 		}
 	}
 
@@ -165,38 +163,49 @@ func (p *TypeScriptPlugin) generateEnumTypes(sb *strings.Builder, s schema.Schem
 
 	// Generate enum types
 	for _, name := range enumNames {
+		def := s.Types[name]
+
 		if enumsAsTypes {
 			// Generate as union type
 			sb.WriteString("export type ")
 			sb.WriteString(name)
 			sb.WriteString(" =\n")
-			// TODO: Add enum values when available in schema
-			sb.WriteString("  | 'PLACEHOLDER';\n")
+
+			for i, val := range def.EnumValues {
+				sb.WriteString("  | '")
+				sb.WriteString(val.Name)
+				sb.WriteString("'")
+				if i < len(def.EnumValues)-1 {
+					sb.WriteString("\n")
+				}
+			}
+			sb.WriteString(";\n\n")
 		} else {
 			// Generate as enum
 			sb.WriteString("export enum ")
 			sb.WriteString(name)
 			sb.WriteString(" {\n")
-			// TODO: Add enum values when available in schema
-			sb.WriteString("  PLACEHOLDER = 'PLACEHOLDER',\n")
-			sb.WriteString("}\n")
+
+			for _, val := range def.EnumValues {
+				sb.WriteString("  ")
+				sb.WriteString(val.Name)
+				sb.WriteString(" = '")
+				sb.WriteString(val.Name)
+				sb.WriteString("',\n")
+			}
+
+			sb.WriteString("}\n\n")
 		}
-		sb.WriteString("\n")
 	}
 }
 
 // generateInputTypes generates TypeScript interfaces for GraphQL input types
-func (p *TypeScriptPlugin) generateInputTypes(sb *strings.Builder, s schema.Schema, strictNulls bool, scalarMap map[string]string) {
-	if s == nil {
-		return
-	}
-
-	typeMap := s.GetTypeMap()
+func (p *TypeScriptPlugin) generateInputTypes(sb *strings.Builder, s *ast.Schema, strictNulls bool, scalarMap map[string]string) {
 	var inputNames []string
 
 	// Collect all input types
-	for name, t := range typeMap {
-		if _, ok := t.(*schema.InputObject); ok {
+	for name, def := range s.Types {
+		if def.Kind == ast.InputObject && !strings.HasPrefix(name, "__") {
 			inputNames = append(inputNames, name)
 		}
 	}
@@ -206,31 +215,43 @@ func (p *TypeScriptPlugin) generateInputTypes(sb *strings.Builder, s schema.Sche
 
 	// Generate input interfaces
 	for _, name := range inputNames {
+		def := s.Types[name]
+
 		sb.WriteString("export interface ")
 		sb.WriteString(name)
 		sb.WriteString(" {\n")
-		// TODO: Add fields when available in schema
-		sb.WriteString("  // TODO: Add input fields\n")
+
+		for _, field := range def.Fields {
+			sb.WriteString("  ")
+			sb.WriteString(field.Name)
+
+			// Add optional marker if field is nullable
+			if field.Type.NonNull == false && !strictNulls {
+				sb.WriteString("?")
+			}
+
+			sb.WriteString(": ")
+			sb.WriteString(p.typeToTypeScript(field.Type, scalarMap))
+
+			// Add null union if strictNulls and nullable
+			if field.Type.NonNull == false && strictNulls {
+				sb.WriteString(" | null")
+			}
+
+			sb.WriteString(";\n")
+		}
+
 		sb.WriteString("}\n\n")
 	}
 }
 
 // generateObjectTypes generates TypeScript interfaces for GraphQL object types
-func (p *TypeScriptPlugin) generateObjectTypes(sb *strings.Builder, s schema.Schema, strictNulls bool, scalarMap map[string]string) {
-	if s == nil {
-		return
-	}
-
-	typeMap := s.GetTypeMap()
+func (p *TypeScriptPlugin) generateObjectTypes(sb *strings.Builder, s *ast.Schema, strictNulls bool, scalarMap map[string]string) {
 	var objectNames []string
 
-	// Collect all object types (excluding Query, Mutation, Subscription)
-	for name, t := range typeMap {
-		if _, ok := t.(*schema.Object); ok {
-			// Skip internal types
-			if strings.HasPrefix(name, "__") {
-				continue
-			}
+	// Collect all object types
+	for name, def := range s.Types {
+		if def.Kind == ast.Object && !strings.HasPrefix(name, "__") {
 			objectNames = append(objectNames, name)
 		}
 	}
@@ -240,30 +261,49 @@ func (p *TypeScriptPlugin) generateObjectTypes(sb *strings.Builder, s schema.Sch
 
 	// Generate object interfaces
 	for _, name := range objectNames {
+		def := s.Types[name]
+
 		sb.WriteString("export interface ")
 		sb.WriteString(name)
 		sb.WriteString(" {\n")
-		// TODO: Add fields when available in schema
+
+		// Add __typename field
 		sb.WriteString("  __typename?: '")
 		sb.WriteString(name)
 		sb.WriteString("';\n")
-		sb.WriteString("  // TODO: Add object fields\n")
+
+		// Add fields
+		for _, field := range def.Fields {
+			sb.WriteString("  ")
+			sb.WriteString(field.Name)
+
+			// Add optional marker if field is nullable
+			if field.Type.NonNull == false && !strictNulls {
+				sb.WriteString("?")
+			}
+
+			sb.WriteString(": ")
+			sb.WriteString(p.typeToTypeScript(field.Type, scalarMap))
+
+			// Add null union if strictNulls and nullable
+			if field.Type.NonNull == false && strictNulls {
+				sb.WriteString(" | null")
+			}
+
+			sb.WriteString(";\n")
+		}
+
 		sb.WriteString("}\n\n")
 	}
 }
 
 // generateInterfaceTypes generates TypeScript interfaces for GraphQL interfaces
-func (p *TypeScriptPlugin) generateInterfaceTypes(sb *strings.Builder, s schema.Schema, strictNulls bool, scalarMap map[string]string) {
-	if s == nil {
-		return
-	}
-
-	typeMap := s.GetTypeMap()
+func (p *TypeScriptPlugin) generateInterfaceTypes(sb *strings.Builder, s *ast.Schema, strictNulls bool, scalarMap map[string]string) {
 	var interfaceNames []string
 
 	// Collect all interface types
-	for name, t := range typeMap {
-		if _, ok := t.(*schema.Interface); ok {
+	for name, def := range s.Types {
+		if def.Kind == ast.Interface && !strings.HasPrefix(name, "__") {
 			interfaceNames = append(interfaceNames, name)
 		}
 	}
@@ -273,29 +313,45 @@ func (p *TypeScriptPlugin) generateInterfaceTypes(sb *strings.Builder, s schema.
 
 	// Generate interfaces
 	for _, name := range interfaceNames {
+		def := s.Types[name]
+
 		sb.WriteString("export interface ")
 		sb.WriteString(name)
 		sb.WriteString(" {\n")
-		// TODO: Add fields when available in schema
-		sb.WriteString("  // TODO: Add interface fields\n")
+
+		// Add fields
+		for _, field := range def.Fields {
+			sb.WriteString("  ")
+			sb.WriteString(field.Name)
+
+			// Add optional marker if field is nullable
+			if field.Type.NonNull == false && !strictNulls {
+				sb.WriteString("?")
+			}
+
+			sb.WriteString(": ")
+			sb.WriteString(p.typeToTypeScript(field.Type, scalarMap))
+
+			// Add null union if strictNulls and nullable
+			if field.Type.NonNull == false && strictNulls {
+				sb.WriteString(" | null")
+			}
+
+			sb.WriteString(";\n")
+		}
+
 		sb.WriteString("}\n\n")
 	}
 }
 
 // generateUnionTypes generates TypeScript union types
-func (p *TypeScriptPlugin) generateUnionTypes(sb *strings.Builder, s schema.Schema) {
-	if s == nil {
-		return
-	}
-
-	typeMap := s.GetTypeMap()
+func (p *TypeScriptPlugin) generateUnionTypes(sb *strings.Builder, s *ast.Schema) {
 	var unionNames []string
 
 	// Collect all union types
-	for name, t := range typeMap {
-		if union, ok := t.(*schema.Union); ok {
+	for name, def := range s.Types {
+		if def.Kind == ast.Union && !strings.HasPrefix(name, "__") {
 			unionNames = append(unionNames, name)
-			_ = union // Will be used when we have possible types
 		}
 	}
 
@@ -304,22 +360,28 @@ func (p *TypeScriptPlugin) generateUnionTypes(sb *strings.Builder, s schema.Sche
 
 	// Generate union types
 	for _, name := range unionNames {
+		def := s.Types[name]
+
 		sb.WriteString("export type ")
 		sb.WriteString(name)
 		sb.WriteString(" =\n")
-		// TODO: Add possible types when available in schema
-		sb.WriteString("  | PlaceholderType;\n\n")
+
+		for i, typeName := range def.Types {
+			sb.WriteString("  | ")
+			sb.WriteString(typeName)
+			if i < len(def.Types)-1 {
+				sb.WriteString("\n")
+			}
+		}
+
+		sb.WriteString(";\n\n")
 	}
 }
 
 // generateOperationTypes generates TypeScript types for GraphQL operations
-func (p *TypeScriptPlugin) generateOperationTypes(sb *strings.Builder, docs []*documents.Document, s schema.Schema, strictNulls bool, scalarMap map[string]string) {
+func (p *TypeScriptPlugin) generateOperationTypes(sb *strings.Builder, docs []*documents.Document, s *ast.Schema, strictNulls bool, scalarMap map[string]string) {
 	// Collect all operations
-	var operations []*documents.Operation
-
-	for _, doc := range docs {
-		operations = append(operations, doc.Operations...)
-	}
+	operations := documents.CollectAllOperations(docs)
 
 	// Sort operations by name for consistent output
 	sort.Slice(operations, func(i, j int) bool {
@@ -337,18 +399,24 @@ func (p *TypeScriptPlugin) generateOperationTypes(sb *strings.Builder, docs []*d
 		sb.WriteString(op.Name)
 		sb.WriteString("Variables {\n")
 
-		if len(op.Variables) > 0 {
-			for _, v := range op.Variables {
+		if len(op.VariableDefinitions) > 0 {
+			for _, v := range op.VariableDefinitions {
 				sb.WriteString("  ")
-				sb.WriteString(v.Name)
-				if !v.Required && !strictNulls {
+				sb.WriteString(v.Variable)
+
+				// Add optional marker if variable is nullable
+				if v.Type.NonNull == false && !strictNulls {
 					sb.WriteString("?")
 				}
+
 				sb.WriteString(": ")
-				sb.WriteString(mapGraphQLTypeToTS(v.Type, scalarMap))
-				if !v.Required && strictNulls {
+				sb.WriteString(p.typeToTypeScript(v.Type, scalarMap))
+
+				// Add null union if strictNulls and nullable
+				if v.Type.NonNull == false && strictNulls {
 					sb.WriteString(" | null")
 				}
+
 				sb.WriteString(";\n")
 			}
 		} else {
@@ -361,28 +429,92 @@ func (p *TypeScriptPlugin) generateOperationTypes(sb *strings.Builder, docs []*d
 		sb.WriteString("export interface ")
 		sb.WriteString(op.Name)
 		sb.WriteString("Result {\n")
-		sb.WriteString("  // TODO: Add result fields based on selection set\n")
+
+		// Generate result fields based on selection set
+		p.generateSelectionSetTypes(sb, op.SelectionSet, s, strictNulls, scalarMap, "  ")
+
 		sb.WriteString("}\n\n")
 	}
 }
 
-// mapGraphQLTypeToTS maps a GraphQL type string to TypeScript
-func mapGraphQLTypeToTS(gqlType string, scalarMap map[string]string) string {
-	// Remove non-null markers
-	// isNonNull := strings.HasSuffix(gqlType, "!") // TODO: use for null handling
-	gqlType = strings.TrimSuffix(gqlType, "!")
+// generateSelectionSetTypes generates TypeScript types for a selection set
+func (p *TypeScriptPlugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.SelectionSet, s *ast.Schema, strictNulls bool, scalarMap map[string]string, indent string) {
+	for _, selection := range selections {
+		switch sel := selection.(type) {
+		case *ast.Field:
+			sb.WriteString(indent)
+			sb.WriteString(sel.Alias)
 
-	// Check if it's a list
-	isList := strings.HasPrefix(gqlType, "[") && strings.HasSuffix(gqlType, "]")
-	if isList {
-		gqlType = strings.TrimPrefix(gqlType, "[")
-		gqlType = strings.TrimSuffix(gqlType, "]")
-		gqlType = strings.TrimSuffix(gqlType, "!")
+			// Look up the field type
+			var fieldType *ast.Type
+			if sel.Definition != nil {
+				fieldType = sel.Definition.Type
+			}
+
+			if fieldType != nil {
+				// Add optional marker if field is nullable
+				if fieldType.NonNull == false && !strictNulls {
+					sb.WriteString("?")
+				}
+
+				sb.WriteString(": ")
+
+				// If field has subselections, generate inline interface
+				if len(sel.SelectionSet) > 0 {
+					sb.WriteString("{\n")
+					p.generateSelectionSetTypes(sb, sel.SelectionSet, s, strictNulls, scalarMap, indent+"  ")
+					sb.WriteString(indent)
+					sb.WriteString("}")
+				} else {
+					sb.WriteString(p.typeToTypeScript(fieldType, scalarMap))
+				}
+
+				// Add null union if strictNulls and nullable
+				if fieldType.NonNull == false && strictNulls {
+					sb.WriteString(" | null")
+				}
+			} else {
+				// Fallback if we can't determine the type
+				sb.WriteString(": any")
+			}
+
+			sb.WriteString(";\n")
+
+		case *ast.InlineFragment:
+			// Handle inline fragments
+			p.generateSelectionSetTypes(sb, sel.SelectionSet, s, strictNulls, scalarMap, indent)
+
+		case *ast.FragmentSpread:
+			// Handle fragment spreads - would need fragment definitions
+			sb.WriteString(indent)
+			sb.WriteString("// Fragment spread: ")
+			sb.WriteString(sel.Name)
+			sb.WriteString("\n")
+		}
+	}
+}
+
+// typeToTypeScript converts a GraphQL type to TypeScript
+func (p *TypeScriptPlugin) typeToTypeScript(t *ast.Type, scalarMap map[string]string) string {
+	if t == nil {
+		return "any"
 	}
 
-	// Map the base type
+	// Handle list types
+	if t.Elem != nil {
+		elemType := p.typeToTypeScript(t.Elem, scalarMap)
+		if t.NonNull {
+			return elemType + "[]"
+		}
+		return elemType + "[] | null"
+	}
+
+	// Get the base type name
+	baseType := t.Name()
+
+	// Map to TypeScript type
 	var tsType string
-	switch gqlType {
+	switch baseType {
 	case "ID", "String":
 		tsType = "string"
 	case "Int", "Float":
@@ -391,17 +523,12 @@ func mapGraphQLTypeToTS(gqlType string, scalarMap map[string]string) string {
 		tsType = "boolean"
 	default:
 		// Check custom scalar mapping
-		if mapped, ok := scalarMap[gqlType]; ok {
+		if mapped, ok := scalarMap[baseType]; ok {
 			tsType = mapped
 		} else {
-			// Assume it's a custom type
-			tsType = gqlType
+			// Use the type name as-is (for enums, objects, etc.)
+			tsType = baseType
 		}
-	}
-
-	// Apply list wrapper
-	if isList {
-		tsType = tsType + "[]"
 	}
 
 	return tsType
