@@ -1,0 +1,23 @@
+# Base schema with core types
+
+type Query {
+  me: User
+  users: [User!]!
+}
+
+type User {
+  id: ID!
+  username: String!
+  email: String!
+  createdAt: DateTime!
+}
+
+type Post {
+  id: ID!
+  title: String!
+  content: String!
+  author: User!
+  createdAt: DateTime!
+}
+
+scalar DateTime

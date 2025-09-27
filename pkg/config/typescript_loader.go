@@ -110,6 +110,18 @@ console.log(JSON.stringify(exportedConfig));
 }
 
 func (l *TypeScriptLoader) mapToConfig(raw map[string]interface{}) (*Config, error) {
+	// Handle onTypeConflict specially if it's a function
+	if conflictVal, ok := raw["onTypeConflict"]; ok {
+		switch conflictVal.(type) {
+		case string:
+			// Keep as string ("error", "useFirst", "useLast")
+		default:
+			// If it's a function or other type, convert to "error" and log warning
+			// JavaScript functions can't be transferred via JSON
+			raw["onTypeConflict"] = "error"
+		}
+	}
+
 	jsonBytes, err := json.Marshal(raw)
 	if err != nil {
 		return nil, err

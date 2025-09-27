@@ -1,0 +1,39 @@
+# Admin-specific schema additions
+
+type Query {
+  # Admin-only queries
+  allUsers(limit: Int, offset: Int): UserConnection!
+  userStats: UserStatistics!
+}
+
+type Mutation {
+  # Admin mutations
+  deleteUser(id: ID!): Boolean!
+  suspendUser(id: ID!, reason: String!): User!
+  unsuspendUser(id: ID!): User!
+}
+
+type UserConnection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type UserEdge {
+  node: User!
+  cursor: String!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type UserStatistics {
+  totalUsers: Int!
+  activeUsers: Int!
+  suspendedUsers: Int!
+  newUsersToday: Int!
+}

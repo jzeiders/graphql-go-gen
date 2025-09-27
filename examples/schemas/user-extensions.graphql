@@ -1,0 +1,23 @@
+# Extensions to the User type and Query
+
+type Query {
+  # New query fields
+  user(id: ID!): User
+  searchUsers(query: String!): [User!]!
+}
+
+# This User type would conflict with base-schema.graphql if onTypeConflict is "error"
+# With "useFirst", the original User type would be kept
+# With "useLast", this version would replace the original
+type User {
+  id: ID!
+  username: String!
+  email: String!
+  firstName: String
+  lastName: String
+  avatar: String
+  bio: String
+  posts: [Post!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}

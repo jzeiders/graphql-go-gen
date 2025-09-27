@@ -28,38 +28,69 @@ func NewFileSchemaLoader() *FileSchemaLoader {
 
 // Load loads schema from multiple sources
 func (l *FileSchemaLoader) Load(ctx context.Context, sources []schema.Source) (schema.Schema, error) {
-	var astSources []*ast.Source
+	return l.LoadWithOptions(ctx, sources, schema.MergeOptions{})
+}
 
-	for _, source := range sources {
-		switch source.Kind {
-		case "file":
-			content, err := l.readFile(source.Path)
-			if err != nil {
-				return nil, fmt.Errorf("reading schema file %s: %w", source.Path, err)
-			}
-			astSources = append(astSources, &ast.Source{
-				Name:  source.Path,
-				Input: content,
-			})
-
-		default:
+// LoadWithOptions loads schema from multiple sources with merge options
+func (l *FileSchemaLoader) LoadWithOptions(ctx context.Context, sources []schema.Source, options schema.MergeOptions) (schema.Schema, error) {
+	if len(sources) == 1 {
+		// Single source, no merging needed
+		source := sources[0]
+		if source.Kind != "file" {
 			return nil, fmt.Errorf("unsupported source kind: %s", source.Kind)
 		}
+
+		content, err := l.readFile(source.Path)
+		if err != nil {
+			return nil, fmt.Errorf("reading schema file %s: %w", source.Path, err)
+		}
+
+		astSchema, err := gqlparser.LoadSchema(&ast.Source{
+			Name:  source.Path,
+			Input: content,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("parsing schema: %w", err)
+		}
+
+		return schema.NewSchema(astSchema, source.Path), nil
 	}
 
-	// Load and validate the schema using gqlparser
-	astSchema, err := gqlparser.LoadSchema(astSources...)
+	// Multiple sources, use merger
+	var schemas []*ast.Schema
+	var sourceNames []string
+
+	for _, source := range sources {
+		if source.Kind != "file" {
+			return nil, fmt.Errorf("unsupported source kind: %s", source.Kind)
+		}
+
+		content, err := l.readFile(source.Path)
+		if err != nil {
+			return nil, fmt.Errorf("reading schema file %s: %w", source.Path, err)
+		}
+
+		// Parse each schema individually first
+		astSchema, err := gqlparser.LoadSchema(&ast.Source{
+			Name:  source.Path,
+			Input: content,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("parsing schema %s: %w", source.Path, err)
+		}
+
+		schemas = append(schemas, astSchema)
+		sourceNames = append(sourceNames, source.Path)
+	}
+
+	// Merge schemas using the new merger
+	mergedSchema, err := schema.MergeSchemas(ctx, schemas, sourceNames, options)
 	if err != nil {
-		return nil, fmt.Errorf("parsing schema: %w", err)
+		return nil, fmt.Errorf("merging schemas: %w", err)
 	}
 
-	// Create source name for tracking
-	sourceName := "merged"
-	if len(sources) == 1 {
-		sourceName = sources[0].Path
-	}
-
-	return schema.NewSchema(astSchema, sourceName), nil
+	sourceName := fmt.Sprintf("merged[%d]", len(sources))
+	return schema.NewSchema(mergedSchema, sourceName), nil
 }
 
 // LoadFromFile loads schema from a single file

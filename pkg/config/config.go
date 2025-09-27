@@ -33,12 +33,13 @@ type OutputTarget struct {
 
 // Config represents the full configuration
 type Config struct {
-	Schema    []SchemaSource          `yaml:"schema"`    // Schema sources
-	Documents Documents               `yaml:"documents"` // Document sources
-	Generates map[string]OutputTarget `yaml:"generates"` // Output targets
-	Watch     bool                    `yaml:"watch"`     // Enable watch mode
-	Verbose   bool                    `yaml:"verbose"`   // Verbose output
-	Scalars   map[string]string       `yaml:"scalars"`   // Custom scalar mappings
+	Schema         []SchemaSource          `yaml:"schema"`          // Schema sources
+	Documents      Documents               `yaml:"documents"`       // Document sources
+	Generates      map[string]OutputTarget `yaml:"generates"`       // Output targets
+	Watch          bool                    `yaml:"watch"`           // Enable watch mode
+	Verbose        bool                    `yaml:"verbose"`         // Verbose output
+	Scalars        map[string]string       `yaml:"scalars"`         // Custom scalar mappings
+	OnTypeConflict string                  `yaml:"onTypeConflict"`  // Conflict resolution strategy: "error" (default), "useFirst", "useLast"
 }
 
 // LoadFile loads configuration from a file (YAML, TypeScript, or JavaScript)
@@ -95,6 +96,11 @@ func (c *Config) setDefaults() error {
 func (c *Config) Validate() error {
 	if len(c.Schema) == 0 {
 		return fmt.Errorf("at least one schema source is required")
+	}
+
+	// Validate conflict resolution strategy
+	if err := ValidateConflictStrategy(c.OnTypeConflict); err != nil {
+		return err
 	}
 
 	for i, source := range c.Schema {

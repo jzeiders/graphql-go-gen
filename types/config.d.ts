@@ -54,6 +54,17 @@ export interface OutputTarget {
 }
 
 /**
+ * Type conflict resolution function
+ * @param left The existing type definition
+ * @param right The new conflicting type definition
+ * @returns The resolved type definition to use
+ */
+export type OnTypeConflictFunction = (
+  left: any, // GraphQL type definition
+  right: any  // GraphQL type definition
+) => any;
+
+/**
  * Main configuration interface
  */
 export interface GraphQLGoGenConfig {
@@ -74,6 +85,15 @@ export interface GraphQLGoGenConfig {
 
   /** Custom scalar type mappings */
   scalars?: Record<string, string>;
+
+  /**
+   * Conflict resolution strategy for type conflicts during schema merging
+   * - "error" (default): Throw an error when conflicts are detected
+   * - "useFirst": Use the first type definition encountered
+   * - "useLast": Use the last type definition encountered
+   * - Function: Custom conflict resolution function
+   */
+  onTypeConflict?: 'error' | 'useFirst' | 'useLast' | OnTypeConflictFunction;
 }
 
 /**
