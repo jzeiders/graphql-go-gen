@@ -144,8 +144,8 @@ func (p *Plugin) generateFragmentTypes(sb *strings.Builder, fragments map[string
 
 		sb.WriteString(exportPrefix + "type " + typeName + " = {\n")
 
-		// Add __typename if not skipped
-		if !skipTypename {
+		hasTypename := selectionHasExplicitTypename(frag.SelectionSet)
+		if !skipTypename && !hasTypename {
 			sb.WriteString("  __typename?: '" + frag.TypeCondition + "';\n")
 		}
 
@@ -228,8 +228,10 @@ func (p *Plugin) generateOperationTypes(sb *strings.Builder, operations map[stri
 
 		sb.WriteString(exportPrefix + "type " + resultTypeName + " = {\n")
 
-		// Add __typename for root type if not skipped
-		if !skipTypename {
+		hasTypename := selectionHasExplicitTypename(op.SelectionSet)
+
+		// Add __typename for root type if not skipped and not explicitly selected
+		if !skipTypename && !hasTypename {
 			switch op.Operation {
 			case ast.Query:
 				sb.WriteString("  __typename?: 'Query';\n")
@@ -263,8 +265,9 @@ func (p *Plugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.S
 				responseKey = sel.Name
 			}
 
-			// Skip __typename if configured
-			if sel.Name == "__typename" && skipTypename {
+			// Track explicit __typename selections separately
+			if sel.Name == "__typename" {
+				fields[responseKey] = &fieldInfo{field: sel}
 				continue
 			}
 
@@ -330,6 +333,11 @@ func (p *Plugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.S
 			sb.WriteString(indent)
 		}
 
+		if name == "__typename" {
+			sb.WriteString(name + ": string;\n")
+			continue
+		}
+
 		// Handle nested selections
 		if len(info.field.SelectionSet) > 0 {
 			// This field has sub-selections
@@ -341,7 +349,8 @@ func (p *Plugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.S
 
 			if isArray {
 				sb.WriteString("Array<{\n")
-				if !skipTypename && info.typ.Elem.NamedType != "" {
+				hasNestedTypename := selectionHasExplicitTypename(info.field.SelectionSet)
+				if !skipTypename && !hasNestedTypename && info.typ.Elem.NamedType != "" {
 					// Try to get the type name for __typename
 					if def, ok := s.Types[info.typ.Elem.NamedType]; ok && def.Kind == ast.Object {
 						sb.WriteString(indent + "    __typename?: '" + def.Name + "';\n")
@@ -351,7 +360,8 @@ func (p *Plugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.S
 				sb.WriteString(indent + "  }>")
 			} else {
 				sb.WriteString("{\n")
-				if !skipTypename && info.typ != nil && info.typ.NamedType != "" {
+				hasNestedTypename := selectionHasExplicitTypename(info.field.SelectionSet)
+				if !skipTypename && !hasNestedTypename && info.typ != nil && info.typ.NamedType != "" {
 					// Try to get the type name for __typename
 					if def, ok := s.Types[info.typ.NamedType]; ok && def.Kind == ast.Object {
 						sb.WriteString(indent + "    __typename?: '" + def.Name + "';\n")
@@ -372,4 +382,20 @@ func (p *Plugin) generateSelectionSetTypes(sb *strings.Builder, selections ast.S
 			sb.WriteString(name + ": " + tsType + ";\n")
 		}
 	}
+}
+
+func selectionHasExplicitTypename(selections ast.SelectionSet) bool {
+	for _, sel := range selections {
+		switch s := sel.(type) {
+		case *ast.Field:
+			if s.Name == "__typename" {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionHasExplicitTypename(s.SelectionSet) {
+				return true
+			}
+		}
+	}
+	return false
 }

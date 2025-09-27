@@ -142,6 +142,7 @@ func (r *Runner) RunAll(ctx context.Context) ([]*BenchmarkResult, error) {
 	}{
 		{"tiny-ts", generator.NewTinyGenerator()},
 		{"mid-ts", generator.NewMidGenerator()},
+		{"large-ts", generator.NewLargeGenerator()},
 	}
 
 	results := make([]*BenchmarkResult, 0, len(benchmarks))

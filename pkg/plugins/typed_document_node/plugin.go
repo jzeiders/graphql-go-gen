@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -36,9 +37,9 @@ func (p *Plugin) Description() string {
 func (p *Plugin) DefaultConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"documentMode":          "graphQLTag",
-		"gqlImport":            "graphql-tag",
-		"documentNodeImport":   "@graphql-typed-document-node/core",
-		"noExport":             false,
+		"gqlImport":             "graphql-tag",
+		"documentNodeImport":    "@graphql-typed-document-node/core",
+		"noExport":              false,
 		"dedupeOperationSuffix": false,
 		"omitOperationSuffix":   false,
 	}
@@ -48,10 +49,10 @@ func (p *Plugin) DefaultConfig() map[string]interface{} {
 func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
 	mode := base.GetString(config, "documentMode", "graphQLTag")
 	validModes := map[string]bool{
-		"graphQLTag":     true,
-		"documentNode":   true,
+		"graphQLTag":            true,
+		"documentNode":          true,
 		"documentNodeImportExt": true,
-		"string":         true,
+		"string":                true,
 	}
 
 	if !validModes[mode] {
@@ -159,7 +160,7 @@ func (p *Plugin) generateFragments(sb *strings.Builder, fragments map[string]*as
 		f.FormatQueryDocument(&ast.QueryDocument{
 			Fragments: []*ast.FragmentDefinition{frag},
 		})
-		fragStr := buf.String()
+		fragStr := normalizeGraphQLString(buf.String())
 
 		constName := name + "FragmentDoc"
 		typeName := base.ToPascalCase(name) + "Fragment"
@@ -275,7 +276,7 @@ func (p *Plugin) buildOperationString(op *ast.OperationDefinition, fragments map
 		}
 	}
 
-	return sb.String()
+	return normalizeGraphQLString(sb.String())
 }
 
 // collectUsedFragments collects all fragments used in a selection set
@@ -309,6 +310,19 @@ func (p *Plugin) collectUsedFragments(selSet ast.SelectionSet, fragments map[str
 	collect(selSet)
 	sort.Strings(result)
 	return result
+}
+
+var (
+	spaceBeforeParenRegexp   = regexp.MustCompile(`([A-Za-z0-9_]) \(`)
+	fragmentSpreadSpacingReg = regexp.MustCompile(`\.\.\. ([A-Z_][A-Za-z0-9_]*)`)
+)
+
+// normalizeGraphQLString fixes minor formatting differences introduced by the
+// gqlparser formatter so generated documents match fixture expectations.
+func normalizeGraphQLString(s string) string {
+	s = spaceBeforeParenRegexp.ReplaceAllString(s, "$1(")
+	s = fragmentSpreadSpacingReg.ReplaceAllString(s, "...$1")
+	return s
 }
 
 // generateDocumentNodeAST generates an AST representation for documentNode mode

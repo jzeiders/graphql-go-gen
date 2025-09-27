@@ -49,9 +49,9 @@ func LoadTestDocuments(t *testing.T, s schema.Schema) []*documents.Document {
 	}
 
 	// Parse and validate operations against schema
-	doc, err := gqlparser.LoadQuery(s.Raw(), string(operationsContent))
-	if err != nil {
-		t.Fatalf("failed to parse operations: %v", err)
+	doc, gqlErr := gqlparser.LoadQuery(s.Raw(), string(operationsContent))
+	if gqlErr != nil {
+		t.Fatalf("failed to parse operations: %v", gqlErr)
 	}
 
 	return []*documents.Document{

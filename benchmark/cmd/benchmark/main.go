@@ -27,7 +27,7 @@ var (
 )
 
 func init() {
-	flag.StringVar(&testSet, "test-set", "all", "Test set to run: tiny, mid, or all")
+	flag.StringVar(&testSet, "test-set", "all", "Test set to run: tiny, mid, large, or all")
 	flag.StringVar(&outputDir, "output-dir", "benchmark-output", "Directory for generated test files")
 	flag.BoolVar(&keepFiles, "keep-files", false, "Don't delete generated files after benchmark")
 	flag.BoolVar(&jsonOutput, "json", false, "Output results as JSON")
@@ -88,8 +88,14 @@ func run() error {
 			return err
 		}
 		results = []*runner.BenchmarkResult{result}
+	case "large", "large-ts":
+		result, err := r.Run(ctx, "large-ts", generator.NewLargeGenerator())
+		if err != nil {
+			return err
+		}
+		results = []*runner.BenchmarkResult{result}
 	default:
-		return fmt.Errorf("unknown test set: %s (use tiny, mid, or all)", testSet)
+		return fmt.Errorf("unknown test set: %s (use tiny, mid, large, or all)", testSet)
 	}
 
 	if err != nil && len(results) == 0 {

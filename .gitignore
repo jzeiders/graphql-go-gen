@@ -47,3 +47,6 @@ testdata/**/__generated__/
 __generated__
 
 .benchmark-output/
+benchmark-output/
+
+.gocache/
