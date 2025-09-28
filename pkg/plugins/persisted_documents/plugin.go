@@ -2,6 +2,7 @@ package persisted_documents
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/formatter"
@@ -35,9 +35,28 @@ func (p *Plugin) Name() string {
 	return "persisted-documents"
 }
 
+// Description returns a brief description of what the plugin generates
+func (p *Plugin) Description() string {
+	return "Generates persisted documents JSON"
+}
+
+// DefaultConfig returns the default configuration for the plugin
+func (p *Plugin) DefaultConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"mode": "embedHashInDocument",
+		"hashPropertyName": "hash",
+	}
+}
+
+// ValidateConfig validates the plugin configuration
+func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
+	return nil
+}
+
 // Generate generates the persisted documents JSON
-func (p *Plugin) Generate(schema *ast.Schema, docs []*documents.Document, cfg interface{}) ([]byte, error) {
-	config := p.parseConfig(cfg)
+func (p *Plugin) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
+	config := p.parseConfig(req.Config)
+	docs := req.Documents
 
 	// Create map of hash -> document
 	persistedDocs := make(map[string]string)
@@ -48,14 +67,11 @@ func (p *Plugin) Generate(schema *ast.Schema, docs []*documents.Document, cfg in
 		}
 
 		// Process each operation in the document
-		for _, def := range doc.AST.Definitions {
-			switch def := def.(type) {
-			case *ast.OperationDefinition:
-				// Normalize and print the document
-				normalized := p.normalizeDocument(doc.AST, def)
-				hash := p.hashDocument(normalized, config.HashAlgorithm)
-				persistedDocs[hash] = normalized
-			}
+		for _, op := range doc.AST.Operations {
+			// Normalize and print the document
+			normalized := p.normalizeOperation(doc.AST, op)
+			hash := p.hashDocument(normalized, config.HashAlgorithm)
+			persistedDocs[hash] = normalized
 		}
 	}
 
@@ -82,7 +98,11 @@ func (p *Plugin) Generate(schema *ast.Schema, docs []*documents.Document, cfg in
 		return nil, fmt.Errorf("encoding persisted documents: %w", err)
 	}
 
-	return buf.Bytes(), nil
+	return &plugin.GenerateResponse{
+		Files: map[string][]byte{
+			req.OutputPath: buf.Bytes(),
+		},
+	}, nil
 }
 
 // parseConfig parses the plugin configuration
@@ -116,26 +136,22 @@ func (p *Plugin) parseConfig(cfg interface{}) *Config {
 	return config
 }
 
-// normalizeDocument normalizes and prints a GraphQL document
-func (p *Plugin) normalizeDocument(doc *ast.Document, op *ast.OperationDefinition) string {
+// normalizeOperation normalizes and prints a GraphQL operation
+func (p *Plugin) normalizeOperation(doc *ast.QueryDocument, op *ast.OperationDefinition) string {
 	// Create a new document with just this operation and its dependencies
-	newDoc := &ast.Document{}
-
-	// Add the operation
-	newDoc.Definitions = append(newDoc.Definitions, op)
+	newDoc := &ast.QueryDocument{
+		Operations: ast.OperationList{op},
+		Fragments:  ast.FragmentDefinitionList{},
+	}
 
 	// Add all fragments that this operation depends on
 	fragments := p.collectFragments(op, doc)
-	for _, frag := range fragments {
-		newDoc.Definitions = append(newDoc.Definitions, frag)
-	}
+	newDoc.Fragments = fragments
 
 	// Format the document
 	var buf strings.Builder
-	formatter := &formatter.Formatter{
-		Writer: &buf,
-	}
-	formatter.FormatDocument(newDoc)
+	f := formatter.NewFormatter(&buf)
+	f.FormatQueryDocument(newDoc)
 
 	// Clean up the output
 	result := strings.TrimSpace(buf.String())
@@ -153,23 +169,21 @@ func (p *Plugin) normalizeDocument(doc *ast.Document, op *ast.OperationDefinitio
 }
 
 // collectFragments collects all fragments used by an operation
-func (p *Plugin) collectFragments(op *ast.OperationDefinition, doc *ast.Document) []*ast.FragmentDefinition {
+func (p *Plugin) collectFragments(op *ast.OperationDefinition, doc *ast.QueryDocument) ast.FragmentDefinitionList {
 	fragmentMap := make(map[string]*ast.FragmentDefinition)
 	visited := make(map[string]bool)
 
 	// Build fragment map
-	for _, def := range doc.Definitions {
-		if frag, ok := def.(*ast.FragmentDefinition); ok {
-			fragmentMap[frag.Name] = frag
-		}
+	for _, frag := range doc.Fragments {
+		fragmentMap[frag.Name] = frag
 	}
 
 	// Collect fragment spreads from operation
 	p.collectFragmentSpreads(op.SelectionSet, fragmentMap, visited)
 
 	// Convert to sorted slice
-	var fragments []*ast.FragmentDefinition
-	for name, frag := range visited {
+	var fragments ast.FragmentDefinitionList
+	for name := range visited {
 		if visited[name] {
 			fragments = append(fragments, fragmentMap[name])
 		}
@@ -231,7 +245,7 @@ func (p *Plugin) hashDocument(content string, algorithm interface{}) string {
 	}
 }
 
-// Register registers the plugin
-func init() {
-	plugin.Register("persisted-documents", &Plugin{})
+// New creates a new persisted-documents plugin
+func New() *Plugin {
+	return &Plugin{}
 }

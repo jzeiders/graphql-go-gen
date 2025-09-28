@@ -2,11 +2,10 @@ package fragment_masking
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
-	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Plugin generates fragment masking utilities for TypeScript
@@ -29,9 +28,24 @@ func (p *Plugin) Name() string {
 	return "fragment-masking"
 }
 
+// Description returns a brief description of what the plugin generates
+func (p *Plugin) Description() string {
+	return "Generates fragment masking utilities for TypeScript"
+}
+
+// DefaultConfig returns the default configuration for the plugin
+func (p *Plugin) DefaultConfig() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+// ValidateConfig validates the plugin configuration
+func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
+	return nil
+}
+
 // Generate generates the fragment masking utilities
-func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, cfg interface{}) ([]byte, error) {
-	config := p.parseConfig(cfg)
+func (p *Plugin) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
+	config := p.parseConfig(req.Config)
 
 	var buf bytes.Buffer
 
@@ -136,7 +150,11 @@ func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, c
 
 	buf.WriteString("}\n")
 
-	return buf.Bytes(), nil
+	return &plugin.GenerateResponse{
+		Files: map[string][]byte{
+			req.OutputPath: buf.Bytes(),
+		},
+	}, nil
 }
 
 // parseConfig parses the plugin configuration
@@ -164,7 +182,7 @@ func (p *Plugin) parseConfig(cfg interface{}) *Config {
 	return config
 }
 
-// Register registers the plugin
-func init() {
-	plugin.Register("fragment-masking", &Plugin{})
+// New creates a new fragment-masking plugin
+func New() *Plugin {
+	return &Plugin{}
 }

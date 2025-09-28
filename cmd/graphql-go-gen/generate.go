@@ -14,11 +14,10 @@ import (
 	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
 
 	// Import additional plugins for client preset
-	// TODO: Fix these plugins to work with the new AST structure
-	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
-	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
-	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
-	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
+	add_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
+	gql_tag_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
+	fragment_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
+	persisted_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
 
 	// Import presets
 	"github.com/jzeiders/graphql-go-gen/pkg/presets"
@@ -53,6 +52,22 @@ func runGenerate(cfg *config.Config) error {
 
 	if err := registry.Register(schema_ast_plugin.New()); err != nil {
 		return fmt.Errorf("registering schema-ast plugin: %w", err)
+	}
+
+	if err := registry.Register(add_plugin.New()); err != nil {
+		return fmt.Errorf("registering add plugin: %w", err)
+	}
+
+	if err := registry.Register(gql_tag_plugin.New()); err != nil {
+		return fmt.Errorf("registering gql-tag-operations plugin: %w", err)
+	}
+
+	if err := registry.Register(fragment_plugin.New()); err != nil {
+		return fmt.Errorf("registering fragment-masking plugin: %w", err)
+	}
+
+	if err := registry.Register(persisted_plugin.New()); err != nil {
+		return fmt.Errorf("registering persisted-documents plugin: %w", err)
 	}
 
 	if !quiet {

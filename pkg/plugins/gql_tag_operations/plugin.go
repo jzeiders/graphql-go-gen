@@ -2,6 +2,7 @@ package gql_tag_operations
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -40,9 +41,25 @@ func (p *Plugin) Name() string {
 	return "gql-tag-operations"
 }
 
+// Description returns a brief description of what the plugin generates
+func (p *Plugin) Description() string {
+	return "Generates TypeScript gql tag functions with type-safe overloads"
+}
+
+// DefaultConfig returns the default configuration for the plugin
+func (p *Plugin) DefaultConfig() map[string]interface{} {
+	return map[string]interface{}{"gqlTagName": "graphql"}
+}
+
+// ValidateConfig validates the plugin configuration
+func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
+	return nil
+}
+
 // Generate generates the gql tag operations code
-func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, cfg interface{}) ([]byte, error) {
-	config := p.parseConfig(cfg)
+func (p *Plugin) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
+	config := p.parseConfig(req.Config)
+	documents := req.Documents
 
 	var buf bytes.Buffer
 	buf.WriteString("/* eslint-disable */\n")
@@ -124,7 +141,11 @@ func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, c
 	buf.WriteString("  ? TType\n")
 	buf.WriteString("  : never;\n")
 
-	return buf.Bytes(), nil
+	return &plugin.GenerateResponse{
+		Files: map[string][]byte{
+			req.OutputPath: buf.Bytes(),
+		},
+	}, nil
 }
 
 // parseConfig parses the plugin configuration
@@ -157,21 +178,23 @@ func (p *Plugin) collectOperations(documents []*documents.Document) []OperationD
 
 		// Process operations
 		for _, op := range doc.AST.Operations {
-				op := OperationDescriptor{
-					Name:         def.Name,
-					Type:         def.Operation,
-					Content:      p.getOperationContent(doc, def),
-					VariableName: p.getOperationVariableName(def),
-				}
-				operations = append(operations, op)
-			case *ast.FragmentDefinition:
-				op := OperationDescriptor{
-					Name:         def.Name,
-					Content:      p.getFragmentContent(doc, def),
-					VariableName: p.getFragmentVariableName(def),
-				}
-				operations = append(operations, op)
+			opDesc := OperationDescriptor{
+				Name:         op.Name,
+				Type:         op.Operation,
+				Content:      p.getOperationContent(doc, op),
+				VariableName: p.getOperationVariableName(op),
 			}
+			operations = append(operations, opDesc)
+		}
+
+		// Process fragments
+		for _, frag := range doc.AST.Fragments {
+			fragDesc := OperationDescriptor{
+				Name:         frag.Name,
+				Content:      p.getFragmentContent(doc, frag),
+				VariableName: p.getFragmentVariableName(frag),
+			}
+			operations = append(operations, fragDesc)
 		}
 	}
 
@@ -266,7 +289,7 @@ func (p *Plugin) escapeString(s string) string {
 	return s
 }
 
-// Register registers the plugin
-func init() {
-	plugin.Register("gql-tag-operations", &Plugin{})
+// New creates a new gql-tag-operations plugin
+func New() *Plugin {
+	return &Plugin{}
 }

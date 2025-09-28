@@ -2,11 +2,10 @@ package add
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
-	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // Plugin adds custom content to generated files
@@ -25,12 +24,29 @@ func (p *Plugin) Name() string {
 	return "add"
 }
 
+// Description returns a brief description of what the plugin generates
+func (p *Plugin) Description() string {
+	return "Adds custom content to generated files"
+}
+
+// DefaultConfig returns the default configuration for the plugin
+func (p *Plugin) DefaultConfig() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+// ValidateConfig validates the plugin configuration
+func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
+	return nil
+}
+
 // Generate generates the output with added content
-func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, cfg interface{}) ([]byte, error) {
-	config := p.parseConfig(cfg)
+func (p *Plugin) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
+	config := p.parseConfig(req.Config)
 
 	if config.Content == "" {
-		return []byte{}, nil
+		return &plugin.GenerateResponse{
+			Files: map[string][]byte{},
+		}, nil
 	}
 
 	var buf bytes.Buffer
@@ -44,7 +60,11 @@ func (p *Plugin) Generate(schema *ast.Schema, documents []*documents.Document, c
 		buf.WriteString("\n")
 	}
 
-	return buf.Bytes(), nil
+	return &plugin.GenerateResponse{
+		Files: map[string][]byte{
+			req.OutputPath: buf.Bytes(),
+		},
+	}, nil
 }
 
 // parseConfig parses the plugin configuration
@@ -77,7 +97,7 @@ func (p *Plugin) parseConfig(cfg interface{}) *Config {
 	return config
 }
 
-// Register registers the plugin
-func init() {
-	plugin.Register("add", &Plugin{})
+// New creates a new add plugin
+func New() *Plugin {
+	return &Plugin{}
 }
