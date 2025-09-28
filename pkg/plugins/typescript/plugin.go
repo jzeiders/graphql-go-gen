@@ -36,7 +36,7 @@ func (p *Plugin) DefaultConfig() map[string]interface{} {
 		"enumsAsTypes":    false,
 		"immutableTypes":  false,
 		"maybeValue":      "T | null",
-		"inputMaybeValue": "T | null | undefined",
+		"inputMaybeValue": "Maybe<T>",
 		"noExport":        false,
 	}
 }

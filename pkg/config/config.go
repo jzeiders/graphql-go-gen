@@ -26,9 +26,11 @@ type Documents struct {
 
 // OutputTarget defines a code generation target
 type OutputTarget struct {
-	Path    string                 `yaml:"path"`              // Output file path
-	Plugins []string               `yaml:"plugins"`           // Plugins to use for generation
-	Config  map[string]interface{} `yaml:"config,omitempty"`  // Plugin-specific configuration
+	Path         string                 `yaml:"path"`                    // Output file path
+	Preset       string                 `yaml:"preset,omitempty"`        // Preset to use (e.g., "client")
+	PresetConfig map[string]interface{} `yaml:"presetConfig,omitempty"` // Preset-specific configuration
+	Plugins      []string               `yaml:"plugins"`                 // Plugins to use for generation
+	Config       map[string]interface{} `yaml:"config,omitempty"`        // Plugin-specific configuration
 }
 
 // Config represents the full configuration
@@ -164,8 +166,13 @@ func (c *Config) Validate() error {
 		if path == "" {
 			return fmt.Errorf("output path cannot be empty")
 		}
-		if len(target.Plugins) == 0 {
-			return fmt.Errorf("output %q: at least one plugin is required", path)
+		// Either preset or plugins must be specified
+		if target.Preset == "" && len(target.Plugins) == 0 {
+			return fmt.Errorf("output %q: either preset or plugins must be specified", path)
+		}
+		// Cannot specify both preset and plugins
+		if target.Preset != "" && len(target.Plugins) > 0 {
+			return fmt.Errorf("output %q: cannot specify both preset and plugins", path)
 		}
 	}
 

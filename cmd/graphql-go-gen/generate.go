@@ -12,6 +12,16 @@ import (
 	ts_ops_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript_operations"
 	tdn_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typed_document_node"
 	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
+
+	// Import additional plugins for client preset
+	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
+	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
+	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
+	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
+
+	// Import presets
+	"github.com/jzeiders/graphql-go-gen/pkg/presets"
+	_ "github.com/jzeiders/graphql-go-gen/pkg/presets/client"
 	"github.com/jzeiders/graphql-go-gen/internal/loader"
 	"github.com/jzeiders/graphql-go-gen/internal/pluck"
 	"github.com/jzeiders/graphql-go-gen/pkg/config"
@@ -219,6 +229,11 @@ func (g *Generator) Generate(ctx context.Context) error {
 
 // generateTarget generates code for a specific output target
 func (g *Generator) generateTarget(ctx context.Context, outputPath string, target config.OutputTarget) error {
+	// Check if using preset
+	if target.Preset != "" {
+		return g.generateWithPreset(ctx, outputPath, target)
+	}
+
 	combinedFiles := make(map[string][]byte)
 
 	// Run each plugin for this target
@@ -286,6 +301,147 @@ func (g *Generator) generateTarget(ctx context.Context, outputPath string, targe
 	}
 
 	return nil
+}
+
+// generateWithPreset generates code using a preset
+func (g *Generator) generateWithPreset(ctx context.Context, outputPath string, target config.OutputTarget) error {
+	// Get the preset
+	preset, err := presets.Get(target.Preset)
+	if err != nil {
+		return fmt.Errorf("getting preset %q: %w", target.Preset, err)
+	}
+
+	// Prepare preset options
+	presetOptions := &presets.PresetOptions{
+		BaseOutputDir: outputPath,
+		Schema:        g.schema.Raw(),
+		SchemaAst:     g.schema.Raw(),
+		Documents:     g.docs,
+		Config:        target.Config,
+		PresetConfig:  target.PresetConfig,
+		Plugins:       []string{}, // Presets manage their own plugins
+	}
+
+	// Filter documents through preset
+	presetOptions.Documents = preset.PrepareDocuments(outputPath, g.docs)
+
+	// Build generation targets from preset
+	generates, err := preset.BuildGeneratesSection(presetOptions)
+	if err != nil {
+		return fmt.Errorf("building generates from preset %q: %w", target.Preset, err)
+	}
+
+	if !g.quiet {
+		fmt.Printf("  Using preset: %s (generating %d files)\n", target.Preset, len(generates))
+	}
+
+	// Generate each target file
+	for _, gen := range generates {
+		if !g.quiet {
+			fmt.Printf("  Generating: %s\n", gen.Filename)
+		}
+
+		// Run plugins for this specific generation
+		var content []byte
+		for _, pluginName := range gen.Plugins {
+			p, ok := g.registry.Get(pluginName)
+			if !ok {
+				// Try global plugin registry as fallback
+				globalPlugin := plugin.Get(pluginName)
+				if globalPlugin == nil {
+					return fmt.Errorf("plugin %q not found", pluginName)
+				}
+				p = &pluginAdapter{Plugin: globalPlugin}
+			}
+
+			// Create generation request
+			req := &plugin.GenerateRequest{
+				Schema:     g.schema,
+				Documents:  gen.Documents,
+				Config:     gen.Config,
+				OutputPath: gen.Filename,
+				ScalarMap:  g.config.Scalars,
+			}
+
+			// Add plugin-specific config
+			if pluginConfig, ok := gen.PluginConfig[pluginName]; ok {
+				req.Config = mergeConfig(req.Config, pluginConfig)
+			}
+
+			// Generate code
+			resp, err := p.Generate(ctx, req)
+			if err != nil {
+				return fmt.Errorf("plugin %q: %w", pluginName, err)
+			}
+
+			// For presets, we expect a single file per plugin in sequence
+			for _, fileContent := range resp.Files {
+				if content == nil {
+					content = fileContent
+				} else {
+					// Append content from subsequent plugins
+					content = append(content, fileContent...)
+				}
+			}
+		}
+
+		// Ensure directory exists
+		dir := filepath.Dir(gen.Filename)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("creating directory %s: %w", dir, err)
+		}
+
+		// Write the generated file
+		if err := os.WriteFile(gen.Filename, content, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", gen.Filename, err)
+		}
+
+		if !g.quiet {
+			fmt.Printf("    Written: %s (%d bytes)\n", gen.Filename, len(content))
+		}
+	}
+
+	return nil
+}
+
+// pluginAdapter adapts the global plugin interface to the local one
+type pluginAdapter struct {
+	Plugin plugin.Plugin
+}
+
+func (a *pluginAdapter) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
+	// Use the global plugin's Generate method
+	content, err := a.Plugin.Generate(req.Schema.Raw(), req.Documents, req.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &plugin.GenerateResponse{
+		Files: map[string][]byte{
+			req.OutputPath: content,
+		},
+	}, nil
+}
+
+// mergeConfig merges two config maps
+func mergeConfig(base map[string]interface{}, overlay interface{}) map[string]interface{} {
+	if base == nil {
+		base = make(map[string]interface{})
+	}
+
+	switch v := overlay.(type) {
+	case map[string]interface{}:
+		for key, value := range v {
+			base[key] = value
+		}
+	default:
+		// If overlay is not a map, use it as the entire config
+		return map[string]interface{}{
+			"content": overlay,
+		}
+	}
+
+	return base
 }
 
 // getBool safely gets a boolean value from a map

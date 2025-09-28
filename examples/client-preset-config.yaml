@@ -1,0 +1,103 @@
+# Example configuration using the client preset
+# This configuration demonstrates all features of the client preset
+# matching the TypeScript GraphQL Code Generator's client preset behavior
+
+# Schema sources - can be files, URLs, or introspection
+schema:
+  # Local schema file
+  - path: ./schema.graphql
+
+  # Remote schema with authentication (uncomment to use)
+  # - url: https://api.example.com/graphql
+  #   headers:
+  #     Authorization: "Bearer ${GRAPHQL_TOKEN}"
+
+# Document sources - where to find GraphQL operations
+documents:
+  include:
+    - "src/**/*.ts"
+    - "src/**/*.tsx"
+    - "src/**/*.graphql"
+    - "src/**/*.gql"
+  exclude:
+    - "node_modules/**"
+    - "src/gql/**"  # Exclude generated files
+
+# Generation target using the client preset
+generates:
+  # IMPORTANT: Output path must end with / for presets
+  ./src/gql/:
+    # Use the client preset (same as TypeScript codegen)
+    preset: client
+
+    # Preset-specific configuration
+    presetConfig:
+      # Fragment masking configuration (default: true)
+      fragmentMasking: true
+      # Or with custom unmask function name:
+      # fragmentMasking:
+      #   unmaskFunctionName: readFragment
+
+      # Custom GraphQL tag name (default: "graphql")
+      gqlTagName: graphql
+
+      # Persisted documents configuration
+      persistedDocuments:
+        # Mode: "embedHashInDocument" or "replaceDocumentWithHash"
+        mode: embedHashInDocument
+        # Property name for the hash (default: "hash")
+        hashPropertyName: hash
+        # Hash algorithm: "sha1", "sha256", or custom function
+        hashAlgorithm: sha256
+
+    # General configuration passed to plugins
+    config:
+      # TypeScript generation options
+      useTypeImports: true
+      enumsAsTypes: false
+      skipTypename: false
+      scalars:
+        DateTime: string
+        Date: string
+        Time: string
+        UUID: string
+        JSON: "Record<string, any>"
+        Decimal: string
+        BigInt: string
+
+# Alternative configurations for different use cases:
+
+# 1. Minimal configuration (uses all defaults)
+# generates:
+#   ./src/gql/:
+#     preset: client
+
+# 2. Without fragment masking
+# generates:
+#   ./src/gql/:
+#     preset: client
+#     presetConfig:
+#       fragmentMasking: false
+
+# 3. With custom gql tag name
+# generates:
+#   ./src/gql/:
+#     preset: client
+#     presetConfig:
+#       gqlTagName: gql
+
+# 4. For production with persisted queries only (no document strings)
+# generates:
+#   ./src/gql/:
+#     preset: client
+#     presetConfig:
+#       persistedDocuments:
+#         mode: replaceDocumentWithHash
+#         hashPropertyName: id
+#         hashAlgorithm: sha256
+
+# Watch mode for development
+watch: false
+
+# Verbose output for debugging
+verbose: false
