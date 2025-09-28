@@ -76,11 +76,21 @@ type GenerateResponse struct {
 	// Files is a map of file path to content
 	Files map[string][]byte
 
+	// GeneratedFiles contains generated files with placement metadata
+	GeneratedFiles []GeneratedFile
+
 	// Errors contains any non-fatal errors during generation
 	Errors []error
 
 	// Warnings contains any warnings
 	Warnings []string
+}
+
+// GeneratedFile represents a single generated file along with placement hints
+type GeneratedFile struct {
+	Path      string
+	Content   []byte
+	Placement string
 }
 
 // Registry manages available plugins

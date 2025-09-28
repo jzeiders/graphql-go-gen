@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jzeiders/graphql-go-gen/pkg/config"
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
+	add_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
 	"github.com/jzeiders/graphql-go-gen/pkg/schema"
 )
 
@@ -100,14 +102,7 @@ func (g *Generator) generateTarget(ctx context.Context, outputPath string, targe
 			return fmt.Errorf("plugin %q: %w", pluginName, err)
 		}
 
-		// Merge generated files
-		for path, content := range resp.Files {
-			// If path is relative, make it relative to the output path
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(filepath.Dir(outputPath), path)
-			}
-			combinedFiles[path] = content
-		}
+		mergeGeneratedContent(combinedFiles, outputPath, resp)
 
 		// Log warnings
 		for _, warning := range resp.Warnings {
@@ -179,4 +174,78 @@ func getString(m map[string]interface{}, key string, defaultValue string) string
 		}
 	}
 	return defaultValue
+}
+
+func mergeGeneratedContent(combined map[string][]byte, basePath string, resp *plugin.GenerateResponse) {
+	if resp == nil {
+		return
+	}
+
+	for _, file := range resp.GeneratedFiles {
+		resolved := resolveOutputPath(basePath, file.Path)
+		if resolved == "" {
+			continue
+		}
+		combined[resolved] = applyPlacement(combined[resolved], file.Content, file.Placement)
+	}
+
+	for path, content := range resp.Files {
+		resolved := resolveOutputPath(basePath, path)
+		if resolved == "" {
+			continue
+		}
+		combined[resolved] = applyPlacement(combined[resolved], content, add_plugin.PlacementAppend)
+	}
+}
+
+func resolveOutputPath(basePath, rawPath string) string {
+	path := rawPath
+	if path == "" {
+		path = basePath
+	}
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if basePath == "" || path == basePath {
+		return path
+	}
+	return filepath.Join(filepath.Dir(basePath), path)
+}
+
+func applyPlacement(existing []byte, addition []byte, placement string) []byte {
+	if addition == nil {
+		if placement == add_plugin.PlacementContent {
+			return nil
+		}
+		return existing
+	}
+
+	switch strings.ToLower(placement) {
+	case add_plugin.PlacementPrepend:
+		if len(addition) == 0 {
+			return existing
+		}
+		merged := make([]byte, 0, len(addition)+len(existing))
+		merged = append(merged, addition...)
+		merged = append(merged, existing...)
+		return merged
+	case add_plugin.PlacementContent:
+		if len(addition) == 0 {
+			return nil
+		}
+		return append([]byte{}, addition...)
+	case add_plugin.PlacementAppend, "":
+		if len(addition) == 0 {
+			return existing
+		}
+		return append(existing, addition...)
+	default:
+		if len(addition) == 0 {
+			return existing
+		}
+		return append(existing, addition...)
+	}
 }

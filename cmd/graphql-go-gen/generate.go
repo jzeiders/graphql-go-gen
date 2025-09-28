@@ -5,18 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jzeiders/graphql-go-gen/internal/codegen"
 	// Import the new plugins
+	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
+	tdn_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typed_document_node"
 	ts_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript"
 	ts_ops_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typescript_operations"
-	tdn_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/typed_document_node"
-	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
 
 	// Import additional plugins for client preset
 	add_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
-	gql_tag_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
 	fragment_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
+	gql_tag_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
 	persisted_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
 
 	// Import presets
@@ -243,6 +244,80 @@ func (g *Generator) Generate(ctx context.Context) error {
 	return nil
 }
 
+func mergeGenerateResponse(combined map[string][]byte, basePath string, resp *plugin.GenerateResponse) {
+	if resp == nil {
+		return
+	}
+
+	for _, file := range resp.GeneratedFiles {
+		resolvedPath := normalizeOutputPath(basePath, file.Path)
+		if resolvedPath == "" {
+			continue
+		}
+		combined[resolvedPath] = mergeContent(combined[resolvedPath], file.Content, file.Placement)
+	}
+
+	for path, content := range resp.Files {
+		resolvedPath := normalizeOutputPath(basePath, path)
+		if resolvedPath == "" {
+			continue
+		}
+		combined[resolvedPath] = mergeContent(combined[resolvedPath], content, add_plugin.PlacementAppend)
+	}
+}
+
+func normalizeOutputPath(basePath, rawPath string) string {
+	finalPath := rawPath
+	if finalPath == "" {
+		finalPath = basePath
+	}
+	if finalPath == "" {
+		return ""
+	}
+	if filepath.IsAbs(finalPath) {
+		return finalPath
+	}
+	if basePath == "" || finalPath == basePath {
+		return finalPath
+	}
+	return filepath.Join(filepath.Dir(basePath), finalPath)
+}
+
+func mergeContent(existing []byte, addition []byte, placement string) []byte {
+	if addition == nil {
+		if placement == add_plugin.PlacementContent {
+			return nil
+		}
+		return existing
+	}
+
+	switch strings.ToLower(placement) {
+	case add_plugin.PlacementPrepend:
+		if len(addition) == 0 {
+			return existing
+		}
+		merged := make([]byte, 0, len(addition)+len(existing))
+		merged = append(merged, addition...)
+		merged = append(merged, existing...)
+		return merged
+	case add_plugin.PlacementContent:
+		if len(addition) == 0 {
+			return nil
+		}
+		return append([]byte{}, addition...)
+	case add_plugin.PlacementAppend, "":
+		if len(addition) == 0 {
+			return existing
+		}
+		return append(existing, addition...)
+	default:
+		if len(addition) == 0 {
+			return existing
+		}
+		return append(existing, addition...)
+	}
+}
+
 // generateTarget generates code for a specific output target
 func (g *Generator) generateTarget(ctx context.Context, outputPath string, target config.OutputTarget) error {
 	// Check if using preset
@@ -283,18 +358,7 @@ func (g *Generator) generateTarget(ctx context.Context, outputPath string, targe
 			return fmt.Errorf("plugin %q: %w", pluginName, err)
 		}
 
-		// Merge generated files
-		for path, content := range resp.Files {
-			// Use the path as-is if it's the same as the output path
-			if path == outputPath {
-				combinedFiles[path] = content
-			} else if !filepath.IsAbs(path) {
-				// If path is relative, make it relative to the output path
-				combinedFiles[filepath.Join(filepath.Dir(outputPath), path)] = content
-			} else {
-				combinedFiles[path] = content
-			}
-		}
+		mergeGenerateResponse(combinedFiles, outputPath, resp)
 
 		// Log warnings
 		for _, warning := range resp.Warnings {
@@ -358,7 +422,7 @@ func (g *Generator) generateWithPreset(ctx context.Context, outputPath string, t
 		}
 
 		// Run plugins for this specific generation
-		var content []byte
+		combinedFiles := make(map[string][]byte)
 		for _, pluginName := range gen.Plugins {
 			p, ok := g.registry.Get(pluginName)
 			if !ok {
@@ -385,36 +449,22 @@ func (g *Generator) generateWithPreset(ctx context.Context, outputPath string, t
 				return fmt.Errorf("plugin %q: %w", pluginName, err)
 			}
 
-			// For presets, we expect a single file per plugin in sequence
-			for _, fileContent := range resp.Files {
-				if content == nil {
-					content = fileContent
-				} else {
-					// Append content from subsequent plugins
-					content = append(content, fileContent...)
-				}
+			mergeGenerateResponse(combinedFiles, gen.Filename, resp)
+		}
+
+		writer := &codegen.DefaultFileWriter{}
+		for path, data := range combinedFiles {
+			if err := writer.Write(path, data); err != nil {
+				return fmt.Errorf("writing %s: %w", path, err)
 			}
-		}
-
-		// Ensure directory exists
-		dir := filepath.Dir(gen.Filename)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("creating directory %s: %w", dir, err)
-		}
-
-		// Write the generated file
-		if err := os.WriteFile(gen.Filename, content, 0644); err != nil {
-			return fmt.Errorf("writing %s: %w", gen.Filename, err)
-		}
-
-		if !g.quiet {
-			fmt.Printf("    Written: %s (%d bytes)\n", gen.Filename, len(content))
+			if !g.quiet {
+				fmt.Printf("    Written: %s (%d bytes)\n", path, len(data))
+			}
 		}
 	}
 
 	return nil
 }
-
 
 // mergeConfig merges two config maps
 func mergeConfig(base map[string]interface{}, overlay interface{}) map[string]interface{} {

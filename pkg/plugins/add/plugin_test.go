@@ -1,8 +1,12 @@
 package add
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,139 +16,108 @@ func TestPlugin_Name(t *testing.T) {
 	assert.Equal(t, "add", p.Name())
 }
 
-func TestPlugin_Generate(t *testing.T) {
+func TestPlugin_Generate_PrependDefault(t *testing.T) {
 	p := &Plugin{}
-
-	t.Run("returns empty for nil config", func(t *testing.T) {
-		output, err := p.Generate(nil, nil, nil)
-		require.NoError(t, err)
-		assert.Empty(t, output)
-	})
-
-	t.Run("adds content from string config", func(t *testing.T) {
-		config := "/* Custom header */"
-		output, err := p.Generate(nil, nil, config)
-		require.NoError(t, err)
-		assert.Equal(t, "/* Custom header */\n", string(output))
-	})
-
-	t.Run("adds content from map config", func(t *testing.T) {
-		config := map[string]interface{}{
-			"content": "// Generated code\n// Do not edit",
-		}
-		output, err := p.Generate(nil, nil, config)
-		require.NoError(t, err)
-		assert.Equal(t, "// Generated code\n// Do not edit\n", string(output))
-	})
-
-	t.Run("preserves newline if already present", func(t *testing.T) {
-		config := map[string]interface{}{
-			"content": "/* eslint-disable */\n",
-		}
-		output, err := p.Generate(nil, nil, config)
-		require.NoError(t, err)
-		assert.Equal(t, "/* eslint-disable */\n", string(output))
-	})
-
-	t.Run("handles placement config", func(t *testing.T) {
-		config := map[string]interface{}{
-			"content":   "// Footer",
-			"placement": "end",
-		}
-		output, err := p.Generate(nil, nil, config)
-		require.NoError(t, err)
-		assert.Equal(t, "// Footer\n", string(output))
-	})
-}
-
-func TestPlugin_parseConfig(t *testing.T) {
-	p := &Plugin{}
-
-	t.Run("returns default config for nil", func(t *testing.T) {
-		config := p.parseConfig(nil)
-		assert.NotNil(t, config)
-		assert.Equal(t, "", config.Content)
-		assert.Equal(t, "start", config.Placement)
-	})
-
-	t.Run("parses string config", func(t *testing.T) {
-		cfg := "/* Header comment */"
-		config := p.parseConfig(cfg)
-		assert.Equal(t, "/* Header comment */", config.Content)
-		assert.Equal(t, "start", config.Placement)
-	})
-
-	t.Run("parses map config with content", func(t *testing.T) {
-		cfg := map[string]interface{}{
-			"content": "// Custom content",
-		}
-		config := p.parseConfig(cfg)
-		assert.Equal(t, "// Custom content", config.Content)
-		assert.Equal(t, "start", config.Placement)
-	})
-
-	t.Run("parses map config with content and placement", func(t *testing.T) {
-		cfg := map[string]interface{}{
-			"content":   "// Footer",
-			"placement": "end",
-		}
-		config := p.parseConfig(cfg)
-		assert.Equal(t, "// Footer", config.Content)
-		assert.Equal(t, "end", config.Placement)
-	})
-
-	t.Run("handles non-string non-map config", func(t *testing.T) {
-		cfg := 12345
-		config := p.parseConfig(cfg)
-		assert.Equal(t, "12345", config.Content)
-		assert.Equal(t, "start", config.Placement)
-	})
-}
-
-func TestPlugin_ContentFormatting(t *testing.T) {
-	p := &Plugin{}
-
-	testCases := []struct {
-		name     string
-		config   interface{}
-		expected string
-	}{
-		{
-			name:     "simple comment",
-			config:   "/* eslint-disable */",
-			expected: "/* eslint-disable */\n",
-		},
-		{
-			name:     "multiline content",
-			config:   "/**\n * Generated file\n * Do not edit\n */",
-			expected: "/**\n * Generated file\n * Do not edit\n */\n",
-		},
-		{
-			name: "content with trailing newline",
-			config: map[string]interface{}{
-				"content": "// Header\n",
+	req := &plugin.GenerateRequest{
+		Config: map[string]interface{}{
+			"add": map[string]interface{}{
+				"content": "/* Custom header */",
 			},
-			expected: "// Header\n",
 		},
-		{
-			name:     "empty content",
-			config:   "",
-			expected: "",
-		},
-		{
-			name: "typescript imports",
-			config: map[string]interface{}{
-				"content": "import type { DocumentNode } from 'graphql';\nimport { print } from 'graphql';",
-			},
-			expected: "import type { DocumentNode } from 'graphql';\nimport { print } from 'graphql';\n",
-		},
+		OutputPath: "out.ts",
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			output, err := p.Generate(nil, nil, tc.config)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expected, string(output))
-		})
+	resp, err := p.Generate(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.GeneratedFiles, 1)
+	file := resp.GeneratedFiles[0]
+	assert.Equal(t, "out.ts", file.Path)
+	assert.Equal(t, PlacementPrepend, file.Placement)
+	assert.Equal(t, "/* Custom header */\n", string(file.Content))
+}
+
+func TestPlugin_Generate_Append(t *testing.T) {
+	p := &Plugin{}
+	req := &plugin.GenerateRequest{
+		Config: map[string]interface{}{
+			"add": map[string]interface{}{
+				"content":   "// Footer",
+				"placement": "append",
+			},
+		},
+		OutputPath: "out.ts",
 	}
+
+	resp, err := p.Generate(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.GeneratedFiles, 1)
+	file := resp.GeneratedFiles[0]
+	assert.Equal(t, PlacementAppend, file.Placement)
+	assert.Equal(t, "// Footer\n", string(file.Content))
+}
+
+func TestPlugin_Generate_StringArray(t *testing.T) {
+	p := &Plugin{}
+	req := &plugin.GenerateRequest{
+		Config: map[string]interface{}{
+			"add": map[string]interface{}{
+				"content": []interface{}{"declare namespace GraphQL {", "  interface Scalars {}"},
+			},
+		},
+		OutputPath: "out.ts",
+	}
+
+	resp, err := p.Generate(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.GeneratedFiles, 1)
+	file := resp.GeneratedFiles[0]
+	assert.Equal(t, "declare namespace GraphQL {\n  interface Scalars {}\n", string(file.Content))
+}
+
+func TestPlugin_Generate_FileReference(t *testing.T) {
+	p := &Plugin{}
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "header.txt")
+	content := "// Header from file"
+	require.NoError(t, os.WriteFile(filePath, []byte(content), 0o600))
+
+	req := &plugin.GenerateRequest{
+		Config: map[string]interface{}{
+			"add": map[string]interface{}{
+				"content": filePath,
+			},
+		},
+		OutputPath: filepath.Join(tempDir, "out.ts"),
+	}
+
+	resp, err := p.Generate(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.GeneratedFiles, 1)
+	file := resp.GeneratedFiles[0]
+	assert.Equal(t, content+"\n", string(file.Content))
+}
+
+func TestPlugin_Generate_NoConfig(t *testing.T) {
+	p := &Plugin{}
+	req := &plugin.GenerateRequest{OutputPath: "out.ts"}
+	resp, err := p.Generate(context.Background(), req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Files)
+	assert.Nil(t, resp.GeneratedFiles)
+}
+
+func TestPlugin_InvalidPlacement(t *testing.T) {
+	p := &Plugin{}
+	req := &plugin.GenerateRequest{
+		Config: map[string]interface{}{
+			"add": map[string]interface{}{
+				"content":   "value",
+				"placement": "middle",
+			},
+		},
+		OutputPath: "out.ts",
+	}
+
+	_, err := p.Generate(context.Background(), req)
+	require.Error(t, err)
 }

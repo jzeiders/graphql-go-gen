@@ -101,3 +101,13 @@ func ToCamelCase(s string) string {
 	// Simple implementation - can be enhanced
 	return strings.ToLower(s[:1]) + s[1:]
 }
+
+// GetStringPtr safely gets a string pointer value from a map
+func GetStringPtr(m map[string]interface{}, key string) *string {
+	if val, ok := m[key]; ok {
+		if s, ok := val.(string); ok {
+			return &s
+		}
+	}
+	return nil
+}

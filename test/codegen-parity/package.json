@@ -4,34 +4,30 @@
   "private": true,
   "scripts": {
     "codegen": "graphql-codegen",
-    "codegen:all": "npm run codegen:default && npm run codegen:immutable && npm run codegen:skip-typename && npm run codegen:omit-suffix && npm run codegen:flatten && npm run codegen:avoid-optionals",
-    "codegen:default": "graphql-codegen --config codegen.default.ts",
-    "codegen:immutable": "graphql-codegen --config codegen.immutable.ts",
-    "codegen:skip-typename": "graphql-codegen --config codegen.skip-typename.ts",
-    "codegen:omit-suffix": "graphql-codegen --config codegen.omit-suffix.ts",
-    "codegen:flatten": "graphql-codegen --config codegen.flatten.ts",
-    "codegen:avoid-optionals": "graphql-codegen --config codegen.avoid-optionals.ts",
-    "generate:go": "for config in codegen.*.ts; do ../../graphql-go-gen generate -c $config; done",
-    "generate:go:default": "../../graphql-go-gen generate -c codegen.default.ts",
-    "generate:go:immutable": "../../graphql-go-gen generate -c codegen.immutable.ts",
-    "generate:go:skip-typename": "../../graphql-go-gen generate -c codegen.skip-typename.ts",
-    "generate:go:omit-suffix": "../../graphql-go-gen generate -c codegen.omit-suffix.ts",
-    "generate:go:flatten": "../../graphql-go-gen generate -c codegen.flatten.ts",
-    "generate:go:avoid-optionals": "../../graphql-go-gen generate -c codegen.avoid-optionals.ts",
+    "codegen:all": "for dir in configs/*/; do for config in $dir*.ts; do echo \"Generating $config\"; npx graphql-codegen --config $config; done; done",
+    "codegen:plugin": "for config in configs/$npm_config_plugin/*.ts; do npx graphql-codegen --config $config; done",
+    "generate:go": "for dir in configs/*/; do for config in $dir*.ts; do ../../graphql-go-gen generate -c $config; done; done",
+    "generate:go:plugin": "for config in configs/$npm_config_plugin/*.ts; do ../../graphql-go-gen generate -c $config; done",
     "test:parity": "go test -v ./parity_test.go",
-    "compare": "node compare.js",
-    "compare:all": "npm run compare",
-    "clean": "rm -rf generated/ go-generated/ parity-report.md"
+    "test:plugin": "go test -v ./parity_test.go -run \"$npm_config_plugin\"",
+    "build:go": "cd ../.. && go build ./cmd/graphql-go-gen",
+    "clean": "rm -rf generated/ go-generated/ parity-report.md",
+    "clean:all": "npm run clean && rm -rf configs/**/*.js"
   },
   "devDependencies": {
     "@graphql-codegen/cli": "^5.0.0",
-    "@graphql-codegen/typescript": "^4.0.0",
-    "@graphql-codegen/typescript-operations": "^4.0.0",
+    "@graphql-codegen/client-preset": "^4.0.0",
     "@graphql-codegen/typed-document-node": "^5.0.0",
+    "@graphql-codegen/typescript": "^4.0.0",
+    "@graphql-codegen/typescript-graphql-request": "^6.0.0",
+    "@graphql-codegen/typescript-operations": "^4.0.0",
     "@graphql-typed-document-node/core": "^3.2.0",
-    "graphql": "^16.8.0",
-    "typescript": "^5.0.0",
+    "chalk": "^5.3.0",
     "diff": "^5.1.0",
-    "chalk": "^5.3.0"
+    "graphql": "^16.8.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@graphql-codegen/schema-ast": "^5.0.0"
   }
 }

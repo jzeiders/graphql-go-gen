@@ -1,39 +1,35 @@
 package gql_tag_operations
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
+	"github.com/jzeiders/graphql-go-gen/pkg/plugins/base"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-// Plugin generates TypeScript gql tag functions with type-safe overloads
+// OperationOrFragment represents an operation or fragment with its name
+type OperationOrFragment struct {
+	InitialName string
+	Definition  ast.Definition
+}
+
+// SourceWithOperations represents a source with its operations
+type SourceWithOperations struct {
+	Source     string
+	Operations []OperationOrFragment
+}
+
+// Plugin generates the gql tag operations functionality
 type Plugin struct{}
 
-// Config for the gql-tag-operations plugin
-type Config struct {
-	// GqlTagName is the name of the GraphQL tag function (default: "graphql")
-	GqlTagName string `yaml:"gqlTagName" json:"gqlTagName"`
-	// SourcesWithOperations contains the operations grouped by source
-	SourcesWithOperations []SourceWithOperations `yaml:"sourcesWithOperations" json:"sourcesWithOperations"`
-}
-
-// SourceWithOperations represents a source file with its operations
-type SourceWithOperations struct {
-	Source     *documents.Document
-	Operations []OperationDescriptor
-}
-
-// OperationDescriptor describes a GraphQL operation
-type OperationDescriptor struct {
-	Name         string
-	VariableName string
-	Content      string
-	Type         ast.Operation
+// New creates a new gql-tag-operations plugin
+func New() plugin.Plugin {
+	return &Plugin{}
 }
 
 // Name returns the plugin name
@@ -41,255 +37,362 @@ func (p *Plugin) Name() string {
 	return "gql-tag-operations"
 }
 
-// Description returns a brief description of what the plugin generates
+// Description returns the plugin description
 func (p *Plugin) Description() string {
-	return "Generates TypeScript gql tag functions with type-safe overloads"
+	return "Generates runtime graphql() function with operation lookup for TypeScript"
 }
 
-// DefaultConfig returns the default configuration for the plugin
+// DefaultConfig returns the default configuration
 func (p *Plugin) DefaultConfig() map[string]interface{} {
-	return map[string]interface{}{"gqlTagName": "graphql"}
+	return map[string]interface{}{
+		"gqlTagName":               "graphql",
+		"useTypeImports":           false,
+		"augmentedModuleName":      nil,
+		"emitLegacyCommonJSImports": false,
+		"documentMode":             "graphQLTag",
+	}
 }
 
 // ValidateConfig validates the plugin configuration
 func (p *Plugin) ValidateConfig(config map[string]interface{}) error {
+	// Validate documentMode if provided
+	if mode, ok := config["documentMode"].(string); ok {
+		validModes := map[string]bool{
+			"graphQLTag": true,
+			"string":     true,
+		}
+		if !validModes[mode] {
+			return fmt.Errorf("invalid documentMode: %s", mode)
+		}
+	}
 	return nil
 }
 
 // Generate generates the gql tag operations code
 func (p *Plugin) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
-	config := p.parseConfig(req.Config)
-	documents := req.Documents
+	// Get configuration
+	gqlTagName := base.GetString(req.Config, "gqlTagName", "graphql")
+	useTypeImports := base.GetBool(req.Config, "useTypeImports", false)
+	augmentedModuleName := base.GetStringPtr(req.Config, "augmentedModuleName")
+	emitLegacyCommonJSImports := base.GetBool(req.Config, "emitLegacyCommonJSImports", false)
+	documentMode := base.GetString(req.Config, "documentMode", "graphQLTag")
 
-	var buf bytes.Buffer
-	buf.WriteString("/* eslint-disable */\n")
-	buf.WriteString("import * as types from './graphql';\n")
-	buf.WriteString("import type { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core';\n\n")
+	// Process sources from config
+	sourcesWithOperations := p.processSources(req)
 
-	// Generate comment about bundle size optimization
-	buf.WriteString("/**\n")
-	buf.WriteString(" * Map of all GraphQL operations in the project.\n")
-	buf.WriteString(" *\n")
-	buf.WriteString(" * This map has several performance disadvantages:\n")
-	buf.WriteString(" * 1. It is not tree-shakeable, so it will include all operations in the project.\n")
-	buf.WriteString(" * 2. It is not minifiable, so the string of a GraphQL query will be multiple times inside the bundle.\n")
-	buf.WriteString(" * 3. It does not support dead code elimination, so it will add unused operations.\n")
-	buf.WriteString(" *\n")
-	buf.WriteString(" * Therefore it is highly recommended to use the babel or swc plugin for production.\n")
-	buf.WriteString(" */\n")
-
-	// Collect all operations
-	operations := p.collectOperations(documents)
-
-	// Generate the Documents type
-	buf.WriteString("type Documents = {\n")
-	for _, op := range operations {
-		buf.WriteString(fmt.Sprintf("  '%s': typeof types.%sDocument;\n",
-			p.escapeString(op.Content), op.VariableName))
-	}
-	buf.WriteString("};\n")
-
-	// Generate the documents object
-	buf.WriteString("const documents: Documents = {\n")
-	for _, op := range operations {
-		buf.WriteString(fmt.Sprintf("  '%s': types.%sDocument,\n",
-			p.escapeString(op.Content), op.VariableName))
-	}
-	buf.WriteString("};\n\n")
-
-	// Generate the graphql function overloads
-	tagName := config.GqlTagName
-	if tagName == "" {
-		tagName = "graphql"
+	// Special handling if sourcesWithOperations is provided in config
+	if configSources, ok := req.Config["sourcesWithOperations"]; ok {
+		if sources, ok := configSources.([]SourceWithOperations); ok {
+			sourcesWithOperations = sources
+		}
 	}
 
-	// Default overload for unknown strings
-	buf.WriteString("/**\n")
-	buf.WriteString(fmt.Sprintf(" * The %s function is used to parse GraphQL queries into a document that can be used by GraphQL clients.\n", tagName))
-	buf.WriteString(" *\n")
-	buf.WriteString(" *\n")
-	buf.WriteString(" * @example\n")
-	buf.WriteString(" * ```ts\n")
-	buf.WriteString(fmt.Sprintf(" * const query = %s(`query GetUser($id: ID!) { user(id: $id) { name } }`);\n", tagName))
-	buf.WriteString(" * ```\n")
-	buf.WriteString(" *\n")
-	buf.WriteString(" * The query argument is unknown!\n")
-	buf.WriteString(" * Please regenerate the types.\n")
-	buf.WriteString(" */\n")
-	buf.WriteString(fmt.Sprintf("export function %s(source: string): unknown;\n\n", tagName))
+	var sb strings.Builder
 
-	// Generate specific overloads for each operation
-	for _, op := range operations {
-		buf.WriteString("/**\n")
-		buf.WriteString(fmt.Sprintf(" * The %s function is used to parse GraphQL queries into a document that can be used by GraphQL clients.\n", tagName))
-		buf.WriteString(" */\n")
-		buf.WriteString(fmt.Sprintf("export function %s(source: '%s'): (typeof documents)['%s'];\n",
-			tagName, p.escapeString(op.Content), p.escapeString(op.Content)))
+	// Generate based on document mode
+	if documentMode == "string" {
+		p.generateStringMode(&sb, sourcesWithOperations, gqlTagName, emitLegacyCommonJSImports)
+	} else if augmentedModuleName != nil {
+		p.generateAugmentedMode(&sb, sourcesWithOperations, gqlTagName, *augmentedModuleName, emitLegacyCommonJSImports)
+	} else {
+		p.generateStandardMode(&sb, sourcesWithOperations, gqlTagName, useTypeImports, emitLegacyCommonJSImports)
 	}
-
-	// Generate the implementation
-	buf.WriteString("\n")
-	buf.WriteString(fmt.Sprintf("export function %s(source: string) {\n", tagName))
-	buf.WriteString("  return (documents as any)[source] ?? {};\n")
-	buf.WriteString("}\n\n")
-
-	// Export the type
-	buf.WriteString("export type DocumentType<TDocumentNode extends DocumentNode<any, any>> = TDocumentNode extends DocumentNode<\n")
-	buf.WriteString("  infer TType,\n")
-	buf.WriteString("  any\n")
-	buf.WriteString(">\n")
-	buf.WriteString("  ? TType\n")
-	buf.WriteString("  : never;\n")
 
 	return &plugin.GenerateResponse{
 		Files: map[string][]byte{
-			req.OutputPath: buf.Bytes(),
+			req.OutputPath: []byte(sb.String()),
 		},
 	}, nil
 }
 
-// parseConfig parses the plugin configuration
-func (p *Plugin) parseConfig(cfg interface{}) *Config {
-	config := &Config{}
-	if cfg == nil {
-		return config
-	}
+// processSources processes documents to extract operations and fragments
+func (p *Plugin) processSources(req *plugin.GenerateRequest) []SourceWithOperations {
+	var result []SourceWithOperations
 
-	if mapConfig, ok := cfg.(map[string]interface{}); ok {
-		if tagName, ok := mapConfig["gqlTagName"].(string); ok {
-			config.GqlTagName = tagName
-		}
-		if sources, ok := mapConfig["sourcesWithOperations"].([]SourceWithOperations); ok {
-			config.SourcesWithOperations = sources
-		}
-	}
+	// Group documents by source
+	sourceMap := make(map[string][]OperationOrFragment)
 
-	return config
-}
-
-// collectOperations collects all operations from documents
-func (p *Plugin) collectOperations(documents []*documents.Document) []OperationDescriptor {
-	var operations []OperationDescriptor
-
-	for _, doc := range documents {
-		if doc.AST == nil {
+	for _, doc := range req.Documents {
+		if doc.Document == nil {
 			continue
 		}
 
-		// Process operations
-		for _, op := range doc.AST.Operations {
-			opDesc := OperationDescriptor{
-				Name:         op.Name,
-				Type:         op.Operation,
-				Content:      p.getOperationContent(doc, op),
-				VariableName: p.getOperationVariableName(op),
+		for _, def := range doc.Document.Definitions {
+			var opOrFrag *OperationOrFragment
+
+			switch d := def.(type) {
+			case *ast.OperationDefinition:
+				if d.Name == "" {
+					// Skip anonymous operations with warning
+					fmt.Printf("[client-preset] warning: anonymous operation skipped: %s\n", doc.Source)
+					continue
+				}
+				opOrFrag = &OperationOrFragment{
+					InitialName: p.getOperationVariableName(d),
+					Definition:  d,
+				}
+			case *ast.FragmentDefinition:
+				opOrFrag = &OperationOrFragment{
+					InitialName: p.getFragmentVariableName(d),
+					Definition:  d,
+				}
 			}
-			operations = append(operations, opDesc)
-		}
 
-		// Process fragments
-		for _, frag := range doc.AST.Fragments {
-			fragDesc := OperationDescriptor{
-				Name:         frag.Name,
-				Content:      p.getFragmentContent(doc, frag),
-				VariableName: p.getFragmentVariableName(frag),
+			if opOrFrag != nil {
+				// Normalize linebreaks in source (CRLF to LF)
+				normalizedSource := strings.ReplaceAll(doc.Source, "\r\n", "\n")
+				sourceMap[normalizedSource] = append(sourceMap[normalizedSource], *opOrFrag)
 			}
-			operations = append(operations, fragDesc)
 		}
 	}
 
-	return operations
-}
-
-// getOperationContent extracts the content of an operation
-func (p *Plugin) getOperationContent(doc *documents.Document, op *ast.OperationDefinition) string {
-	// Try to get the original content from the document
-	if doc.Content != "" {
-		return strings.TrimSpace(doc.Content)
-	}
-
-	// Fallback to reconstructing from AST
-	return p.reconstructOperation(op)
-}
-
-// getFragmentContent extracts the content of a fragment
-func (p *Plugin) getFragmentContent(doc *documents.Document, frag *ast.FragmentDefinition) string {
-	// Try to get the original content from the document
-	if doc.Content != "" {
-		return strings.TrimSpace(doc.Content)
-	}
-
-	// Fallback to reconstructing from AST
-	return p.reconstructFragment(frag)
-}
-
-// reconstructOperation reconstructs an operation from its AST
-func (p *Plugin) reconstructOperation(op *ast.OperationDefinition) string {
-	// This is a simplified reconstruction - in production you'd want to use a proper printer
-	var buf bytes.Buffer
-
-	buf.WriteString(string(op.Operation))
-	if op.Name != "" {
-		buf.WriteString(" ")
-		buf.WriteString(op.Name)
-	}
-
-	if len(op.VariableDefinitions) > 0 {
-		buf.WriteString("(")
-		for i, v := range op.VariableDefinitions {
-			if i > 0 {
-				buf.WriteString(", ")
-			}
-			buf.WriteString("$")
-			buf.WriteString(v.Variable)
-			buf.WriteString(": ")
-			buf.WriteString(v.Type.String())
+	// Convert map to slice
+	for source, ops := range sourceMap {
+		if len(ops) > 0 {
+			// Take the first operation as the primary one
+			result = append(result, SourceWithOperations{
+				Source:     source,
+				Operations: ops,
+			})
 		}
-		buf.WriteString(")")
 	}
 
-	buf.WriteString(" { ... }")
-	return buf.String()
+	// Sort for consistent output
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Source < result[j].Source
+	})
+
+	return result
 }
 
-// reconstructFragment reconstructs a fragment from its AST
-func (p *Plugin) reconstructFragment(frag *ast.FragmentDefinition) string {
-	// This is a simplified reconstruction
-	return fmt.Sprintf("fragment %s on %s { ... }", frag.Name, frag.TypeCondition)
-}
-
-// getOperationVariableName generates a variable name for an operation
+// getOperationVariableName generates the variable name for an operation
 func (p *Plugin) getOperationVariableName(op *ast.OperationDefinition) string {
-	if op.Name != "" {
-		return p.capitalizeFirst(op.Name) + p.capitalizeFirst(string(op.Operation))
+	if op.Name == "" {
+		return ""
 	}
-	return p.capitalizeFirst(string(op.Operation))
+	// Convert operation name to PascalCase and add Document suffix
+	return toPascalCase(op.Name) + "Document"
 }
 
-// getFragmentVariableName generates a variable name for a fragment
+// getFragmentVariableName generates the variable name for a fragment
 func (p *Plugin) getFragmentVariableName(frag *ast.FragmentDefinition) string {
-	return p.capitalizeFirst(frag.Name) + "FragmentDoc"
+	// Convert fragment name to PascalCase and add FragmentDoc suffix
+	return toPascalCase(frag.Name) + "FragmentDoc"
 }
 
-// capitalizeFirst capitalizes the first letter of a string
-func (p *Plugin) capitalizeFirst(s string) string {
-	if len(s) == 0 {
-		return s
+// generateStringMode generates code for string document mode
+func (p *Plugin) generateStringMode(sb *strings.Builder, sources []SourceWithOperations, gqlTagName string, emitLegacyCommonJSImports bool) {
+	jsExt := ""
+	if !emitLegacyCommonJSImports {
+		jsExt = ".js"
 	}
+
+	sb.WriteString(fmt.Sprintf("import * as types from './graphql%s';\n\n", jsExt))
+
+	// Generate document registry
+	if len(sources) > 0 {
+		p.generateDocumentRegistry(sb, sources, "augmented")
+	} else {
+		sb.WriteString("const documents = {};\n")
+	}
+
+	// Generate gql function overloads
+	if len(sources) > 0 {
+		p.generateGqlOverloads(sb, sources, gqlTagName, "augmented", emitLegacyCommonJSImports)
+		sb.WriteString("\n")
+	}
+
+	// Generate main gql function
+	sb.WriteString(fmt.Sprintf("export function %s(source: string) {\n", gqlTagName))
+	sb.WriteString("  return (documents as any)[source] ?? {};\n")
+	sb.WriteString("}\n")
+}
+
+// generateStandardMode generates code for standard mode with TypedDocumentNode
+func (p *Plugin) generateStandardMode(sb *strings.Builder, sources []SourceWithOperations, gqlTagName string, useTypeImports bool, emitLegacyCommonJSImports bool) {
+	jsExt := ""
+	if !emitLegacyCommonJSImports {
+		jsExt = ".js"
+	}
+
+	// Imports
+	sb.WriteString(fmt.Sprintf("import * as types from './graphql%s';\n", jsExt))
+
+	importType := "import"
+	if useTypeImports {
+		importType = "import type"
+	}
+	sb.WriteString(fmt.Sprintf("%s { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core';\n\n", importType))
+
+	// Generate document registry
+	if len(sources) > 0 {
+		p.generateDocumentRegistry(sb, sources, "lookup")
+	} else {
+		sb.WriteString("const documents = [];\n")
+	}
+
+	// JSDoc comment for the main function
+	sb.WriteString("\n/**\n")
+	sb.WriteString(fmt.Sprintf(" * The %s function is used to parse GraphQL queries into a document that can be used by GraphQL clients.\n", gqlTagName))
+	sb.WriteString(" *\n")
+	sb.WriteString(" * @example\n")
+	sb.WriteString(" * ```ts\n")
+	sb.WriteString(fmt.Sprintf(" * const query = %s(`query GetUser($id: ID!) { user(id: $id) { name } }`);\n", gqlTagName))
+	sb.WriteString(" * ```\n")
+	sb.WriteString(" *\n")
+	sb.WriteString(" * The query argument is unknown!\n")
+	sb.WriteString(" * Please regenerate the types.\n")
+	sb.WriteString(" */\n")
+	sb.WriteString(fmt.Sprintf("export function %s(source: string): unknown;\n\n", gqlTagName))
+
+	// Generate gql function overloads
+	if len(sources) > 0 {
+		p.generateGqlOverloads(sb, sources, gqlTagName, "lookup", emitLegacyCommonJSImports)
+		sb.WriteString("\n")
+	}
+
+	// Main gql function implementation
+	sb.WriteString(fmt.Sprintf("export function %s(source: string) {\n", gqlTagName))
+	sb.WriteString("  return (documents as any)[source] ?? {};\n")
+	sb.WriteString("}\n\n")
+
+	// DocumentType helper
+	sb.WriteString("export type DocumentType<TDocumentNode extends DocumentNode<any, any>> = TDocumentNode extends DocumentNode<\n")
+	sb.WriteString("  infer TType,\n")
+	sb.WriteString("  any\n")
+	sb.WriteString(">\n")
+	sb.WriteString("  ? TType\n")
+	sb.WriteString("  : never;\n")
+}
+
+// generateAugmentedMode generates code for module augmentation mode
+func (p *Plugin) generateAugmentedMode(sb *strings.Builder, sources []SourceWithOperations, gqlTagName string, augmentedModuleName string, emitLegacyCommonJSImports bool) {
+	sb.WriteString("import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core';\n")
+	sb.WriteString(fmt.Sprintf("declare module \"%s\" {\n", augmentedModuleName))
+
+	// Indent content
+	var content strings.Builder
+	content.WriteString("\n")
+
+	if len(sources) > 0 {
+		p.generateGqlOverloads(&content, sources, gqlTagName, "augmented", emitLegacyCommonJSImports)
+	}
+
+	content.WriteString(fmt.Sprintf("export function %s(source: string): unknown;\n\n", gqlTagName))
+
+	// DocumentType helper
+	content.WriteString("export type DocumentType<TDocumentNode extends DocumentNode<any, any>> = TDocumentNode extends DocumentNode<\n")
+	content.WriteString("  infer TType,\n")
+	content.WriteString("  any\n")
+	content.WriteString(">\n")
+	content.WriteString("  ? TType\n")
+	content.WriteString("  : never;\n")
+
+	// Indent all lines
+	lines := strings.Split(content.String(), "\n")
+	for _, line := range lines {
+		if line == "" {
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("  " + line + "\n")
+		}
+	}
+
+	sb.WriteString("}\n")
+}
+
+// generateDocumentRegistry generates the document registry
+func (p *Plugin) generateDocumentRegistry(sb *strings.Builder, sources []SourceWithOperations, mode string) {
+	sb.WriteString("/**\n")
+	sb.WriteString(" * Map of all GraphQL operations in the project.\n")
+	sb.WriteString(" *\n")
+	sb.WriteString(" * This map has several performance disadvantages:\n")
+	sb.WriteString(" * 1. It is not tree-shakeable, so it will include all operations in the project.\n")
+	sb.WriteString(" * 2. It is not minifiable, so the string of a GraphQL query will be multiple times inside the bundle.\n")
+	sb.WriteString(" * 3. It does not support dead code elimination, so it will add unused operations.\n")
+	sb.WriteString(" *\n")
+	sb.WriteString(" * Therefore it is highly recommended to use the babel or swc plugin for production.\n")
+	sb.WriteString(" * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size\n")
+	sb.WriteString(" */\n")
+
+	// Use a map to dedupe
+	seenLines := make(map[string]bool)
+
+	// Type definition
+	sb.WriteString("type Documents = {\n")
+	for _, source := range sources {
+		if len(source.Operations) > 0 {
+			line := fmt.Sprintf("    %s: typeof types.%s,\n", escapeString(source.Source), source.Operations[0].InitialName)
+			if !seenLines[line] {
+				sb.WriteString(line)
+				seenLines[line] = true
+			}
+		}
+	}
+	sb.WriteString("};\n")
+
+	// Reset for actual values
+	seenLines = make(map[string]bool)
+
+	// Actual document registry
+	sb.WriteString("const documents: Documents = {\n")
+	for _, source := range sources {
+		if len(source.Operations) > 0 {
+			line := fmt.Sprintf("    %s: types.%s,\n", escapeString(source.Source), source.Operations[0].InitialName)
+			if !seenLines[line] {
+				sb.WriteString(line)
+				seenLines[line] = true
+			}
+		}
+	}
+	sb.WriteString("};\n")
+}
+
+// generateGqlOverloads generates the overloaded gql function signatures
+func (p *Plugin) generateGqlOverloads(sb *strings.Builder, sources []SourceWithOperations, gqlTagName string, mode string, emitLegacyCommonJSImports bool) {
+	// Use a set to dedupe
+	seen := make(map[string]bool)
+
+	for _, source := range sources {
+		if len(source.Operations) == 0 {
+			continue
+		}
+
+		var returnType string
+		if mode == "lookup" {
+			returnType = fmt.Sprintf("(typeof documents)[%s]", escapeString(source.Source))
+		} else {
+			jsExt := ""
+			if !emitLegacyCommonJSImports {
+				jsExt = ".js"
+			}
+			returnType = fmt.Sprintf("typeof import('./graphql%s').%s", jsExt, source.Operations[0].InitialName)
+		}
+
+		signature := fmt.Sprintf("/**\n * The %s function is used to parse GraphQL queries into a document that can be used by GraphQL clients.\n */\nexport function %s(source: %s): %s;\n",
+			gqlTagName, gqlTagName, escapeString(source.Source), returnType)
+
+		if !seen[signature] {
+			sb.WriteString(signature)
+			seen[signature] = true
+		}
+	}
+}
+
+// toPascalCase converts a string to PascalCase
+func toPascalCase(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Simple implementation - first letter uppercase
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // escapeString escapes a string for use in TypeScript
-func (p *Plugin) escapeString(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "'", "\\'")
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	s = strings.ReplaceAll(s, "\t", "\\t")
-	return s
-}
-
-// New creates a new gql-tag-operations plugin
-func New() *Plugin {
-	return &Plugin{}
+func escapeString(s string) string {
+	// Use JSON marshaling for proper escaping
+	escaped := fmt.Sprintf("%q", s)
+	// Replace backticks if any
+	escaped = strings.ReplaceAll(escaped, "`", "\\`")
+	return escaped
 }
