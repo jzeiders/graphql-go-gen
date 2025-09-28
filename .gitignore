@@ -50,3 +50,4 @@ __generated__
 benchmark-output/
 
 .gocache/
+**/node_modules/

@@ -122,6 +122,96 @@ func (l *TypeScriptLoader) mapToConfig(raw map[string]interface{}) (*Config, err
 		}
 	}
 
+	// Handle schema field - it can be string, []string, or []object
+	if schemaVal, ok := raw["schema"]; ok && schemaVal != nil {
+		var schemas []SchemaSource
+
+		switch v := schemaVal.(type) {
+		case string:
+			// Single string: schema: './schema.graphql'
+			schemas = []SchemaSource{{Type: "file", Path: v}}
+		case []interface{}:
+			// Array of strings or objects
+			for _, item := range v {
+				switch s := item.(type) {
+				case string:
+					// String in array: ['./schema1.graphql', './schema2.graphql']
+					schemas = append(schemas, SchemaSource{Type: "file", Path: s})
+				case map[string]interface{}:
+					// Object in array: [{type: 'url', url: '...'}]
+					// This will be handled by the normal JSON unmarshaling
+					// Keep as-is for now, will be processed later
+					schemas = nil
+					goto skipSchemaProcessing
+				}
+			}
+		case map[string]interface{}:
+			// Single object (rare but possible)
+			// Keep as-is for normal processing
+			goto skipSchemaProcessing
+		}
+
+		if schemas != nil {
+			raw["schema"] = schemas
+		}
+	}
+skipSchemaProcessing:
+
+	// Handle documents field - it can be string, []string, or object with include/exclude
+	if docsVal, ok := raw["documents"]; ok && docsVal != nil {
+		documents := Documents{
+			Include: []string{},
+			Exclude: []string{},
+		}
+
+		switch v := docsVal.(type) {
+		case string:
+			// Single string: documents: 'path/to/file.graphql'
+			documents.Include = []string{v}
+		case []interface{}:
+			// Array of strings: documents: ['path1/*.graphql', 'path2/*.gql']
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					// Handle exclusion patterns (starting with !)
+					if len(str) > 0 && str[0] == '!' {
+						documents.Exclude = append(documents.Exclude, str[1:])
+					} else {
+						documents.Include = append(documents.Include, str)
+					}
+				}
+			}
+		case map[string]interface{}:
+			// Object with include/exclude: documents: { include: [...], exclude: [...] }
+			if includeVal, ok := v["include"]; ok {
+				switch inc := includeVal.(type) {
+				case string:
+					documents.Include = []string{inc}
+				case []interface{}:
+					for _, item := range inc {
+						if str, ok := item.(string); ok {
+							documents.Include = append(documents.Include, str)
+						}
+					}
+				}
+			}
+			if excludeVal, ok := v["exclude"]; ok {
+				switch exc := excludeVal.(type) {
+				case string:
+					documents.Exclude = []string{exc}
+				case []interface{}:
+					for _, item := range exc {
+						if str, ok := item.(string); ok {
+							documents.Exclude = append(documents.Exclude, str)
+						}
+					}
+				}
+			}
+		}
+
+		// Replace the raw documents field with our structured version
+		raw["documents"] = documents
+	}
+
 	jsonBytes, err := json.Marshal(raw)
 	if err != nil {
 		return nil, err

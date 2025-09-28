@@ -1,0 +1,37 @@
+{
+  "name": "codegen-parity-test",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "codegen": "graphql-codegen",
+    "codegen:all": "npm run codegen:default && npm run codegen:immutable && npm run codegen:skip-typename && npm run codegen:omit-suffix && npm run codegen:flatten && npm run codegen:avoid-optionals",
+    "codegen:default": "graphql-codegen --config codegen.default.ts",
+    "codegen:immutable": "graphql-codegen --config codegen.immutable.ts",
+    "codegen:skip-typename": "graphql-codegen --config codegen.skip-typename.ts",
+    "codegen:omit-suffix": "graphql-codegen --config codegen.omit-suffix.ts",
+    "codegen:flatten": "graphql-codegen --config codegen.flatten.ts",
+    "codegen:avoid-optionals": "graphql-codegen --config codegen.avoid-optionals.ts",
+    "generate:go": "for config in codegen.*.ts; do ../../graphql-go-gen generate -c $config; done",
+    "generate:go:default": "../../graphql-go-gen generate -c codegen.default.ts",
+    "generate:go:immutable": "../../graphql-go-gen generate -c codegen.immutable.ts",
+    "generate:go:skip-typename": "../../graphql-go-gen generate -c codegen.skip-typename.ts",
+    "generate:go:omit-suffix": "../../graphql-go-gen generate -c codegen.omit-suffix.ts",
+    "generate:go:flatten": "../../graphql-go-gen generate -c codegen.flatten.ts",
+    "generate:go:avoid-optionals": "../../graphql-go-gen generate -c codegen.avoid-optionals.ts",
+    "test:parity": "go test -v ./parity_test.go",
+    "compare": "node compare.js",
+    "compare:all": "npm run compare",
+    "clean": "rm -rf generated/ go-generated/ parity-report.md"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^5.0.0",
+    "@graphql-codegen/typescript": "^4.0.0",
+    "@graphql-codegen/typescript-operations": "^4.0.0",
+    "@graphql-codegen/typed-document-node": "^5.0.0",
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "graphql": "^16.8.0",
+    "typescript": "^5.0.0",
+    "diff": "^5.1.0",
+    "chalk": "^5.3.0"
+  }
+}

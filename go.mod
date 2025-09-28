@@ -4,7 +4,6 @@ go 1.25.1
 
 require (
 	github.com/evanw/esbuild v0.25.10
-	github.com/graphql-go/graphql v0.8.1
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
 	github.com/vektah/gqlparser/v2 v2.5.30

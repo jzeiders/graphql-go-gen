@@ -14,14 +14,15 @@ import (
 	schema_ast_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/schema_ast"
 
 	// Import additional plugins for client preset
-	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
-	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
-	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
-	_ "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
+	// TODO: Fix these plugins to work with the new AST structure
+	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
+	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
+	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
+	// _ "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
 
 	// Import presets
 	"github.com/jzeiders/graphql-go-gen/pkg/presets"
-	_ "github.com/jzeiders/graphql-go-gen/pkg/presets/client"
+	// _ "github.com/jzeiders/graphql-go-gen/pkg/presets/client"
 	"github.com/jzeiders/graphql-go-gen/internal/loader"
 	"github.com/jzeiders/graphql-go-gen/internal/pluck"
 	"github.com/jzeiders/graphql-go-gen/pkg/config"
@@ -346,12 +347,7 @@ func (g *Generator) generateWithPreset(ctx context.Context, outputPath string, t
 		for _, pluginName := range gen.Plugins {
 			p, ok := g.registry.Get(pluginName)
 			if !ok {
-				// Try global plugin registry as fallback
-				globalPlugin := plugin.Get(pluginName)
-				if globalPlugin == nil {
-					return fmt.Errorf("plugin %q not found", pluginName)
-				}
-				p = &pluginAdapter{Plugin: globalPlugin}
+				return fmt.Errorf("plugin %q not found", pluginName)
 			}
 
 			// Create generation request
@@ -404,24 +400,6 @@ func (g *Generator) generateWithPreset(ctx context.Context, outputPath string, t
 	return nil
 }
 
-// pluginAdapter adapts the global plugin interface to the local one
-type pluginAdapter struct {
-	Plugin plugin.Plugin
-}
-
-func (a *pluginAdapter) Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.GenerateResponse, error) {
-	// Use the global plugin's Generate method
-	content, err := a.Plugin.Generate(req.Schema.Raw(), req.Documents, req.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &plugin.GenerateResponse{
-		Files: map[string][]byte{
-			req.OutputPath: content,
-		},
-	}, nil
-}
 
 // mergeConfig merges two config maps
 func mergeConfig(base map[string]interface{}, overlay interface{}) map[string]interface{} {

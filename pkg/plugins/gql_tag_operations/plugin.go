@@ -155,9 +155,8 @@ func (p *Plugin) collectOperations(documents []*documents.Document) []OperationD
 			continue
 		}
 
-		for _, def := range doc.AST.Definitions {
-			switch def := def.(type) {
-			case *ast.OperationDefinition:
+		// Process operations
+		for _, op := range doc.AST.Operations {
 				op := OperationDescriptor{
 					Name:         def.Name,
 					Type:         def.Operation,

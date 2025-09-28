@@ -1,7 +1,6 @@
 package presets
 
 import (
-	"github.com/jzeiders/graphql-go-gen/pkg/config"
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -19,7 +18,7 @@ type GenerateOptions struct {
 
 // DocumentTransform represents a transformation to apply to documents
 type DocumentTransform interface {
-	Transform(doc *ast.Document) (*ast.Document, error)
+	Transform(doc *ast.QueryDocument) (*ast.QueryDocument, error)
 }
 
 // PresetOptions represents the input options for a preset
