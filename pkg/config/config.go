@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -226,8 +227,15 @@ func (c *Config) ResolveRelativePaths(configPath string) {
 	// Resolve output paths
 	newGenerates := make(map[string]OutputTarget)
 	for path, target := range c.Generates {
+		// Preserve trailing slash for directory outputs (needed for presets)
+		hasTrailingSlash := strings.HasSuffix(path, "/")
+
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(baseDir, path)
+			// Restore trailing slash if it was present
+			if hasTrailingSlash && !strings.HasSuffix(path, "/") {
+				path = path + "/"
+			}
 		}
 		target.Path = path
 		newGenerates[path] = target

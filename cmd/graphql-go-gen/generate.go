@@ -21,7 +21,7 @@ import (
 
 	// Import presets
 	"github.com/jzeiders/graphql-go-gen/pkg/presets"
-	// _ "github.com/jzeiders/graphql-go-gen/pkg/presets/client"
+	_ "github.com/jzeiders/graphql-go-gen/pkg/presets/client"
 	"github.com/jzeiders/graphql-go-gen/internal/loader"
 	"github.com/jzeiders/graphql-go-gen/internal/pluck"
 	"github.com/jzeiders/graphql-go-gen/pkg/config"
