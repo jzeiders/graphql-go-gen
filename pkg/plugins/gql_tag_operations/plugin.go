@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jzeiders/graphql-go-gen/pkg/documents"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugin"
 	"github.com/jzeiders/graphql-go-gen/pkg/plugins/base"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -15,7 +14,8 @@ import (
 // OperationOrFragment represents an operation or fragment with its name
 type OperationOrFragment struct {
 	InitialName string
-	Definition  ast.Definition
+	Operation   *ast.OperationDefinition
+	Fragment    *ast.FragmentDefinition
 }
 
 // SourceWithOperations represents a source with its operations
@@ -113,36 +113,35 @@ func (p *Plugin) processSources(req *plugin.GenerateRequest) []SourceWithOperati
 	sourceMap := make(map[string][]OperationOrFragment)
 
 	for _, doc := range req.Documents {
-		if doc.Document == nil {
+		if doc.AST == nil {
 			continue
 		}
 
-		for _, def := range doc.Document.Definitions {
-			var opOrFrag *OperationOrFragment
-
-			switch d := def.(type) {
-			case *ast.OperationDefinition:
-				if d.Name == "" {
-					// Skip anonymous operations with warning
-					fmt.Printf("[client-preset] warning: anonymous operation skipped: %s\n", doc.Source)
-					continue
-				}
-				opOrFrag = &OperationOrFragment{
-					InitialName: p.getOperationVariableName(d),
-					Definition:  d,
-				}
-			case *ast.FragmentDefinition:
-				opOrFrag = &OperationOrFragment{
-					InitialName: p.getFragmentVariableName(d),
-					Definition:  d,
-				}
+		// Process operations
+		for _, op := range doc.AST.Operations {
+			if op.Name == "" {
+				// Skip anonymous operations with warning
+				fmt.Printf("[client-preset] warning: anonymous operation skipped: %s\n", doc.Content)
+				continue
 			}
-
-			if opOrFrag != nil {
-				// Normalize linebreaks in source (CRLF to LF)
-				normalizedSource := strings.ReplaceAll(doc.Source, "\r\n", "\n")
-				sourceMap[normalizedSource] = append(sourceMap[normalizedSource], *opOrFrag)
+			opOrFrag := &OperationOrFragment{
+				InitialName: p.getOperationVariableName(op),
+				Operation:   op,
 			}
+			// Normalize linebreaks in source (CRLF to LF)
+			normalizedSource := strings.ReplaceAll(doc.Content, "\r\n", "\n")
+			sourceMap[normalizedSource] = append(sourceMap[normalizedSource], *opOrFrag)
+		}
+
+		// Process fragments
+		for _, frag := range doc.AST.Fragments {
+			opOrFrag := &OperationOrFragment{
+				InitialName: p.getFragmentVariableName(frag),
+				Fragment:    frag,
+			}
+			// Normalize linebreaks in source (CRLF to LF)
+			normalizedSource := strings.ReplaceAll(doc.Content, "\r\n", "\n")
+			sourceMap[normalizedSource] = append(sourceMap[normalizedSource], *opOrFrag)
 		}
 	}
 

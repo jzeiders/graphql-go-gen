@@ -16,7 +16,7 @@ import (
 
 // NormalizeAndPrintDocumentNode normalizes a document for persisted operations
 // It removes client-only directives and formats consistently
-func NormalizeAndPrintDocumentNode(doc *ast.Document) string {
+func NormalizeAndPrintDocumentNode(doc *ast.QueryDocument) string {
 	if doc == nil {
 		return ""
 	}
@@ -29,8 +29,8 @@ func NormalizeAndPrintDocumentNode(doc *ast.Document) string {
 
 	// Format the document consistently
 	var buf bytes.Buffer
-	formatter := formatter.NewFormatter(&buf)
-	formatter.FormatDocument(cloned)
+	f := formatter.NewFormatter(&buf)
+	f.FormatQueryDocument(cloned)
 
 	return buf.String()
 }
@@ -60,15 +60,15 @@ func GenerateDocumentHash(content string, algorithm interface{}) string {
 }
 
 // cloneDocument creates a deep copy of a GraphQL document
-func cloneDocument(doc *ast.Document) *ast.Document {
+func cloneDocument(doc *ast.QueryDocument) *ast.QueryDocument {
 	if doc == nil {
 		return nil
 	}
 
 	// Serialize and reparse for a deep clone
 	var buf bytes.Buffer
-	formatter := formatter.NewFormatter(&buf)
-	formatter.FormatDocument(doc)
+	f := formatter.NewFormatter(&buf)
+	f.FormatQueryDocument(doc)
 
 	cloned, err := parser.ParseQuery(&ast.Source{
 		Input: buf.String(),
@@ -82,7 +82,7 @@ func cloneDocument(doc *ast.Document) *ast.Document {
 }
 
 // removeClientDirectives removes client-only directives from a document
-func removeClientDirectives(doc *ast.Document) {
+func removeClientDirectives(doc *ast.QueryDocument) {
 	if doc == nil {
 		return
 	}
@@ -94,22 +94,31 @@ func removeClientDirectives(doc *ast.Document) {
 		"stream":     true,
 	}
 
-	for _, def := range doc.Definitions {
-		removeDirectivesFromDefinition(def, clientDirectives)
+	for _, op := range doc.Operations {
+		removeDirectivesFromOperation(op, clientDirectives)
+	}
+
+	for _, frag := range doc.Fragments {
+		removeDirectivesFromFragment(frag, clientDirectives)
 	}
 }
 
-// removeDirectivesFromDefinition removes specific directives from a definition
-func removeDirectivesFromDefinition(def ast.Definition, directivesToRemove map[string]bool) {
-	switch d := def.(type) {
-	case *ast.OperationDefinition:
-		d.Directives = filterDirectives(d.Directives, directivesToRemove)
-		removeDirectivesFromSelectionSet(d.SelectionSet, directivesToRemove)
-
-	case *ast.FragmentDefinition:
-		d.Directives = filterDirectives(d.Directives, directivesToRemove)
-		removeDirectivesFromSelectionSet(d.SelectionSet, directivesToRemove)
+// removeDirectivesFromOperation removes specific directives from an operation
+func removeDirectivesFromOperation(op *ast.OperationDefinition, directivesToRemove map[string]bool) {
+	if op == nil {
+		return
 	}
+	op.Directives = filterDirectives(op.Directives, directivesToRemove)
+	removeDirectivesFromSelectionSet(op.SelectionSet, directivesToRemove)
+}
+
+// removeDirectivesFromFragment removes specific directives from a fragment
+func removeDirectivesFromFragment(frag *ast.FragmentDefinition, directivesToRemove map[string]bool) {
+	if frag == nil {
+		return
+	}
+	frag.Directives = filterDirectives(frag.Directives, directivesToRemove)
+	removeDirectivesFromSelectionSet(frag.SelectionSet, directivesToRemove)
 }
 
 // removeDirectivesFromSelectionSet removes directives from a selection set

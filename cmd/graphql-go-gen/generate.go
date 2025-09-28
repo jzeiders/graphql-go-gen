@@ -18,7 +18,6 @@ import (
 	add_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/add"
 	fragment_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/fragment_masking"
 	gql_tag_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
-	persisted_plugin "github.com/jzeiders/graphql-go-gen/pkg/plugins/persisted_documents"
 
 	// Import presets
 	"github.com/jzeiders/graphql-go-gen/pkg/presets"
@@ -67,9 +66,7 @@ func runGenerate(cfg *config.Config) error {
 		return fmt.Errorf("registering fragment-masking plugin: %w", err)
 	}
 
-	if err := registry.Register(persisted_plugin.New()); err != nil {
-		return fmt.Errorf("registering persisted-documents plugin: %w", err)
-	}
+	// Persisted documents are handled within the client preset, not as a separate plugin
 
 	if !quiet {
 		fmt.Println("Registered plugins:", registry.List())

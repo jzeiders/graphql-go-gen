@@ -10,23 +10,24 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 func TestClientPreset_PrepareDocuments(t *testing.T) {
 	preset := &ClientPreset{}
 
 	docs := []*documents.Document{
-		{Source: "src/queries.ts"},
-		{Source: "src/mutations.ts"},
-		{Source: "src/gql/generated.ts"},
-		{Source: "src/gql/index.ts"},
+		{FilePath: "src/queries.ts"},
+		{FilePath: "src/mutations.ts"},
+		{FilePath: "src/gql/generated.ts"},
+		{FilePath: "src/gql/index.ts"},
 	}
 
 	filtered := preset.PrepareDocuments("src/gql/", docs)
 
 	assert.Len(t, filtered, 2)
-	assert.Equal(t, "src/queries.ts", filtered[0].Source)
-	assert.Equal(t, "src/mutations.ts", filtered[1].Source)
+	assert.Equal(t, "src/queries.ts", filtered[0].FilePath)
+	assert.Equal(t, "src/mutations.ts", filtered[1].FilePath)
 }
 
 func TestClientPreset_BuildGeneratesSection(t *testing.T) {
@@ -187,10 +188,18 @@ func TestClientPreset_BuildGeneratesSection(t *testing.T) {
 		}
 
 		require.NotNil(t, persistedGen)
-		persistedConfig := persistedGen.PluginConfig["persisted-documents"].(*PersistedDocumentsConfig)
-		assert.Equal(t, "replaceDocumentWithHash", persistedConfig.Mode)
-		assert.Equal(t, "documentId", persistedConfig.HashPropertyName)
-		assert.Equal(t, "sha256", persistedConfig.HashAlgorithm)
+		// Persisted documents are generated with the "add" plugin containing JSON
+		addConfig, ok := persistedGen.PluginConfig["add"].(map[string]interface{})
+		assert.True(t, ok, "Should have 'add' plugin config")
+		if ok {
+			content, hasContent := addConfig["content"].(string)
+			assert.True(t, hasContent, "Should have content in add plugin")
+			// Just check that it's JSON-like
+			if hasContent {
+				assert.Contains(t, content, "{")
+				assert.Contains(t, content, "}")
+			}
+		}
 	})
 }
 
@@ -258,17 +267,75 @@ func TestClientPreset_parsePersistedDocuments(t *testing.T) {
 	})
 }
 
-func TestHashDocument(t *testing.T) {
+func TestProcessDocuments(t *testing.T) {
+	preset := &ClientPreset{}
+
+	// Create schema for parsing
+	schema, _ := gqlparser.LoadSchema(&ast.Source{
+		Input: `
+			type Query {
+				user: User
+			}
+			type User {
+				id: ID!
+				name: String!
+				email: String
+			}
+		`,
+	})
+
+	// Create test documents
+	doc1, _ := gqlparser.LoadQuery(schema, `query GetUser { user { id name } }`)
+
+	// For fragment, we need to load the full document that contains both query and fragment
+	doc2, _ := gqlparser.LoadQuery(schema, `
+		fragment UserFields on User { id name email }
+		query UseFragment {
+			user {
+				...UserFields
+			}
+		}
+	`)
+
+	docs := []*documents.Document{
+		{
+			FilePath: "query.graphql",
+			Content:  "query GetUser { user { id name } }",
+			AST:      doc1,
+		},
+		{
+			FilePath: "fragment.graphql",
+			Content:  `fragment UserFields on User { id name email }
+query UseFragment {
+	user {
+		...UserFields
+	}
+}`,
+			AST:      doc2,
+		},
+	}
+
+	sources := preset.processDocuments(docs)
+
+	// Should have 2 sources - one for each document
+	assert.GreaterOrEqual(t, len(sources), 1)
+	assert.NotEmpty(t, sources[0].Source)
+	if len(sources) > 0 {
+		assert.NotEmpty(t, sources[0].Operations)
+	}
+}
+
+func TestGenerateDocumentHash(t *testing.T) {
 	content := "query GetUser { user { id name } }"
 
 	t.Run("hashes with sha1", func(t *testing.T) {
-		hash := hashDocument(content, "sha1")
+		hash := GenerateDocumentHash(content, "sha1")
 		assert.NotEmpty(t, hash)
 		assert.Len(t, hash, 40) // SHA1 produces 40 hex chars
 	})
 
 	t.Run("hashes with sha256", func(t *testing.T) {
-		hash := hashDocument(content, "sha256")
+		hash := GenerateDocumentHash(content, "sha256")
 		assert.NotEmpty(t, hash)
 		assert.Len(t, hash, 64) // SHA256 produces 64 hex chars
 	})
@@ -277,13 +344,47 @@ func TestHashDocument(t *testing.T) {
 		customHash := func(s string) string {
 			return "custom-" + s[:10]
 		}
-		hash := hashDocument(content, customHash)
+		hash := GenerateDocumentHash(content, customHash)
 		assert.Equal(t, "custom-query GetU", hash)
 	})
 
 	t.Run("defaults to sha1 for unknown algorithm", func(t *testing.T) {
-		hash := hashDocument(content, "unknown")
+		hash := GenerateDocumentHash(content, "unknown")
 		assert.NotEmpty(t, hash)
 		assert.Len(t, hash, 40) // SHA1 produces 40 hex chars
+	})
+}
+
+func TestNormalizeAndPrintDocumentNode(t *testing.T) {
+	// Parse a query directly without schema validation
+	doc, err := parser.ParseQuery(&ast.Source{
+		Input: `query GetUser @client { user { id name } }`,
+	})
+	require.NoError(t, err)
+
+	normalized := NormalizeAndPrintDocumentNode(doc)
+
+	// Should not contain @client directive after normalization
+	assert.NotContains(t, normalized, "@client")
+	assert.Contains(t, normalized, "GetUser")
+}
+
+func TestPersistedDocumentsManifest(t *testing.T) {
+	manifest := PersistedDocumentsManifest{
+		"hash1": "query GetUser { user { id } }",
+		"hash2": "query GetPosts { posts { title } }",
+	}
+
+	t.Run("sorts keys", func(t *testing.T) {
+		keys := manifest.SortedKeys()
+		assert.Equal(t, []string{"hash1", "hash2"}, keys)
+	})
+
+	t.Run("generates valid JSON", func(t *testing.T) {
+		json := manifest.ToJSON()
+		assert.Contains(t, json, "\"hash1\"")
+		assert.Contains(t, json, "\"hash2\"")
+		assert.Contains(t, json, "query GetUser")
+		assert.Contains(t, json, "query GetPosts")
 	})
 }

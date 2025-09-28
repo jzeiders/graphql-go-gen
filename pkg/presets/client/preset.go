@@ -1,15 +1,15 @@
 package client
 
 import (
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jzeiders/graphql-go-gen/pkg/documents"
+	"github.com/jzeiders/graphql-go-gen/pkg/plugins/gql_tag_operations"
 	"github.com/jzeiders/graphql-go-gen/pkg/presets"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 // FragmentMaskingConfig configures fragment masking
@@ -49,6 +49,8 @@ type ClientPresetConfig struct {
 	StrictScalars bool `yaml:"strictScalars" json:"strictScalars"`
 	// NamingConvention for generated types (camelCase, PascalCase, snake_case, etc.)
 	NamingConvention interface{} `yaml:"namingConvention" json:"namingConvention"`
+	// EmitLegacyCommonJSImports controls CommonJS imports generation
+	EmitLegacyCommonJSImports bool `yaml:"emitLegacyCommonJSImports" json:"emitLegacyCommonJSImports"`
 	// UseTypeImports will use import type {} rather than import {} when importing only types
 	UseTypeImports bool `yaml:"useTypeImports" json:"useTypeImports"`
 	// SkipTypename does not add __typename to the generated types, unless it was specified in the selection set
@@ -82,14 +84,19 @@ type ClientPresetConfig struct {
 }
 
 // ClientPreset implements the client preset for TypeScript code generation
-type ClientPreset struct{}
+type ClientPreset struct{
+	// persistedDocumentsMap tracks documents for persisted operations
+	persistedDocumentsMap PersistedDocumentsManifest
+	// mutex for thread-safe access to persisted documents
+	mu sync.Mutex
+}
 
 // PrepareDocuments filters out the output file from the documents list
 func (p *ClientPreset) PrepareDocuments(outputFilePath string, docs []*documents.Document) []*documents.Document {
 	filtered := make([]*documents.Document, 0, len(docs))
 	for _, doc := range docs {
 		// Exclude the output file itself and any files in the output directory
-		if !strings.HasPrefix(doc.Source, outputFilePath) {
+		if !strings.HasPrefix(doc.FilePath, outputFilePath) {
 			filtered = append(filtered, doc)
 		}
 	}
@@ -112,6 +119,14 @@ func (p *ClientPreset) BuildGeneratesSection(options *presets.PresetOptions) ([]
 
 	// Determine persisted documents settings
 	persistedDocsConfig := p.parsePersistedDocuments(config.PersistedDocuments)
+
+	// Initialize persisted documents map if needed
+	if persistedDocsConfig != nil {
+		p.persistedDocumentsMap = make(PersistedDocumentsManifest)
+	}
+
+	// Process sources to extract operations and fragments
+	sourcesWithOperations := p.processDocuments(options.Documents)
 
 	// Build list of files to generate
 	var generates []*presets.GenerateOptions
@@ -166,7 +181,11 @@ func (p *ClientPreset) BuildGeneratesSection(options *presets.PresetOptions) ([]
 				"content": "/* eslint-disable */",
 			},
 			"gql-tag-operations": map[string]interface{}{
-				"gqlTagName": gqlTagName,
+				"gqlTagName":              gqlTagName,
+				"sourcesWithOperations":   sourcesWithOperations,
+				"useTypeImports":          config.UseTypeImports,
+				"emitLegacyCommonJSImports": config.EmitLegacyCommonJSImports,
+				"documentMode":            config.DocumentMode,
 			},
 		},
 		Schema:    options.Schema,
@@ -193,7 +212,12 @@ func (p *ClientPreset) BuildGeneratesSection(options *presets.PresetOptions) ([]
 				"add": map[string]interface{}{
 					"content": "/* eslint-disable */",
 				},
-				"fragment-masking": fragmentMaskingPluginConfig,
+				"fragment-masking": map[string]interface{}{
+					"unmaskFunctionName":       fragmentMaskingConfig.UnmaskFunctionName,
+					"useTypeImports":           config.UseTypeImports,
+					"emitLegacyCommonJSImports": config.EmitLegacyCommonJSImports,
+					"isStringDocumentMode":     config.DocumentMode == "string",
+				},
 			},
 			Schema:    options.Schema,
 			Documents: []*documents.Document{}, // No documents needed for fragment masking
@@ -228,14 +252,19 @@ func (p *ClientPreset) BuildGeneratesSection(options *presets.PresetOptions) ([]
 
 	// 5. persisted-documents.json (if enabled)
 	if persistedDocsConfig != nil {
+		// Generate persisted documents manifest
+		p.generatePersistedDocumentsMap(options.Documents, persistedDocsConfig)
+
 		generates = append(generates, &presets.GenerateOptions{
 			Filename: filepath.Join(options.BaseOutputDir, "persisted-documents.json"),
-			Plugins:  []string{"persisted-documents"},
+			Plugins:  []string{"add"},
 			PluginConfig: map[string]interface{}{
-				"persisted-documents": persistedDocsConfig,
+				"add": map[string]interface{}{
+					"content": p.persistedDocumentsMap.ToJSON(),
+				},
 			},
 			Schema:    options.Schema,
-			Documents: options.Documents,
+			Documents: []*documents.Document{},
 			Config:    map[string]interface{}{},
 		})
 	}
@@ -423,28 +452,75 @@ func (p *ClientPreset) parsePersistedDocuments(cfg interface{}) *PersistedDocume
 	}
 }
 
-// hashDocument generates a hash for a document
-func hashDocument(content string, algorithm interface{}) string {
-	switch alg := algorithm.(type) {
-	case string:
-		switch alg {
-		case "sha256":
-			hash := sha256.Sum256([]byte(content))
-			return hex.EncodeToString(hash[:])
-		case "sha1":
-			fallthrough
-		default:
-			hash := sha1.Sum([]byte(content))
-			return hex.EncodeToString(hash[:])
+// processDocuments processes documents to extract operations and fragments
+func (p *ClientPreset) processDocuments(docs []*documents.Document) []gql_tag_operations.SourceWithOperations {
+	sources := ProcessSources(docs, DefaultBuildName)
+
+	var result []gql_tag_operations.SourceWithOperations
+	for _, source := range sources {
+		var ops []gql_tag_operations.OperationOrFragment
+		for _, op := range source.Operations {
+			ops = append(ops, gql_tag_operations.OperationOrFragment{
+				InitialName: op.InitialName,
+				Operation:   op.Operation,
+				Fragment:    op.Fragment,
+			})
 		}
-	case func(string) string:
-		// Custom hash function
-		return alg(content)
-	default:
-		// Default to SHA1
-		hash := sha1.Sum([]byte(content))
-		return hex.EncodeToString(hash[:])
+		result = append(result, gql_tag_operations.SourceWithOperations{
+			Source:     source.Source,
+			Operations: ops,
+		})
 	}
+
+	return result
+}
+
+// generatePersistedDocumentsMap generates the persisted documents manifest
+func (p *ClientPreset) generatePersistedDocumentsMap(docs []*documents.Document, config *PersistedDocumentsConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, doc := range docs {
+		if doc.AST == nil {
+			continue
+		}
+
+		// Normalize and print the document
+		documentString := NormalizeAndPrintDocumentNode(doc.AST)
+
+		// Generate hash
+		hash := GenerateDocumentHash(documentString, config.HashAlgorithm)
+
+		// Store in manifest
+		p.persistedDocumentsMap[hash] = documentString
+	}
+}
+
+// OnExecutableDocumentNode handles document processing hooks
+func (p *ClientPreset) OnExecutableDocumentNode(doc *ast.QueryDocument, config *ClientPresetConfig, persistedDocsConfig *PersistedDocumentsConfig) map[string]interface{} {
+	var meta map[string]interface{}
+
+	// Call custom hook if provided
+	if config.OnExecutableDocumentNode != nil {
+		meta = config.OnExecutableDocumentNode(doc)
+	}
+
+	// Add persisted document hash if configured
+	if persistedDocsConfig != nil {
+		documentString := NormalizeAndPrintDocumentNode(doc)
+		hash := GenerateDocumentHash(documentString, persistedDocsConfig.HashAlgorithm)
+
+		p.mu.Lock()
+		p.persistedDocumentsMap[hash] = documentString
+		p.mu.Unlock()
+
+		if meta == nil {
+			meta = make(map[string]interface{})
+		}
+		meta[persistedDocsConfig.HashPropertyName] = hash
+	}
+
+	return meta
 }
 
 // Register registers the client preset
